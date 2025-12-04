@@ -1,0 +1,92 @@
+# AISAC Agent Configuration
+
+agent:
+  # Agent ID (auto-generated if empty)
+  id: ""
+  # Labels for agent grouping/filtering
+  labels:
+    - production
+    - webserver
+  # Heartbeat interval
+  heartbeat_interval: 30s
+  # Initial reconnect delay
+  reconnect_delay: 5s
+  # Maximum reconnect delay
+  max_reconnect_delay: 5m
+
+server:
+  # Command server WebSocket URL
+  url: "wss://localhost:8443/ws"
+  # Connection timeout
+  connect_timeout: 30s
+  # Write timeout
+  write_timeout: 10s
+  # Read timeout
+  read_timeout: 60s
+
+tls:
+  # Enable mTLS
+  enabled: true
+  # Agent certificate
+  cert_file: "/etc/aisac/certs/agent.crt"
+  # Agent private key
+  key_file: "/etc/aisac/certs/agent.key"
+  # CA certificate
+  ca_file: "/etc/aisac/certs/ca.crt"
+  # Skip certificate verification (NOT RECOMMENDED)
+  skip_verify: false
+
+actions:
+  # Enabled actions (only these will be executed)
+  enabled:
+    - block_ip
+    - unblock_ip
+    - isolate_host
+    - unisolate_host
+    - disable_user
+    - enable_user
+    - kill_process
+    # - collect_forensics
+    # - threat_hunt
+
+  # Rate limits per action
+  rate_limits:
+    block_ip:
+      max_per_minute: 10
+      max_per_hour: 100
+    isolate_host:
+      max_per_minute: 1
+      max_per_hour: 5
+    disable_user:
+      max_per_minute: 5
+      max_per_hour: 50
+
+  # Default action timeout
+  default_timeout: 5m
+
+# SOAR/n8n callback configuration
+callback:
+  # Enable callbacks to SOAR
+  enabled: false
+  # Webhook URL (n8n, SOAR platform, etc.)
+  url: "https://n8n.example.com/webhook/aisac-callback"
+  # Bearer token for authentication
+  auth_token: ""
+  # Request timeout
+  timeout: 30s
+  # Number of retry attempts on failure
+  retry_attempts: 3
+  # Delay between retries
+  retry_delay: 5s
+  # Skip TLS verification (NOT RECOMMENDED)
+  skip_tls_verify: false
+
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"
+  # Log format: json, text
+  format: "json"
+  # Output: stdout, file
+  output: "stdout"
+  # Log file path (when output is "file")
+  file: "/var/log/aisac/agent.log"
