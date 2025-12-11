@@ -1,0 +1,47 @@
+# AISAC Agent Test Configuration
+
+agent:
+  id: "test-agent-001"
+  labels:
+    - test
+  heartbeat_interval: 10s
+  reconnect_delay: 2s
+  max_reconnect_delay: 30s
+
+server:
+  url: "wss://localhost:8443/ws"
+  connect_timeout: 10s
+  write_timeout: 10s
+  read_timeout: 60s
+
+tls:
+  enabled: true
+  cert_file: "./certs/agent.crt"
+  key_file: "./certs/agent.key"
+  ca_file: "./certs/ca.crt"
+  skip_verify: false
+
+actions:
+  enabled:
+    - block_ip
+    - unblock_ip
+    - isolate_host
+    - unisolate_host
+    - disable_user
+    - enable_user
+    - kill_process
+
+  rate_limits:
+    block_ip:
+      max_per_minute: 10
+      max_per_hour: 100
+
+  default_timeout: 2m
+
+callback:
+  enabled: false
+
+logging:
+  level: "debug"
+  format: "json"
+  output: "stdout"

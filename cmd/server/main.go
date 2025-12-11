@@ -38,6 +38,7 @@ var (
 	logLevel       string
 	apiToken       string
 	allowedOrigins string
+	apiMTLS        bool
 )
 
 // Server represents the command server.
@@ -75,6 +76,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&logLevel, "log-level", "l", "info", "log level")
 	rootCmd.Flags().StringVar(&apiToken, "api-token", "", "API bearer token for REST API authentication (required)")
 	rootCmd.Flags().StringVar(&allowedOrigins, "allowed-origins", "", "Comma-separated list of allowed WebSocket origins")
+	rootCmd.Flags().BoolVar(&apiMTLS, "api-mtls", true, "Require mTLS for API REST (disable for SOAR/n8n clients)")
 
 	rootCmd.SetVersionTemplate(`{{.Name}} {{.Version}}
 Commit: ` + commit + `
@@ -192,13 +194,28 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 		return nil, fmt.Errorf("failed to parse CA certificate")
 	}
 
+	// If apiMTLS is disabled, request client cert but don't require it
+	// This allows agents to use mTLS while API clients use only bearer token
+	clientAuth := tls.RequireAndVerifyClientCert
+	if !apiMTLS {
+		clientAuth = tls.VerifyClientCertIfGiven
+		s.logger.Info().Msg("API mTLS disabled - REST API will accept connections without client certificates")
+	}
+
 	return &tls.Config{
 		ClientCAs:  caCertPool,
-		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientAuth: clientAuth,
 	}, nil
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Agents MUST always use mTLS, even if apiMTLS is disabled
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		s.logger.Warn().Str("remote", r.RemoteAddr).Msg("WebSocket connection rejected: client certificate required for agents")
+		http.Error(w, "Client certificate required", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("WebSocket upgrade failed")
