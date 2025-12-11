@@ -19,15 +19,28 @@ const (
 type ActionType string
 
 const (
+	// Firewall/Network actions
 	ActionBlockIP         ActionType = "block_ip"
 	ActionUnblockIP       ActionType = "unblock_ip"
 	ActionIsolateHost     ActionType = "isolate_host"
 	ActionUnisolateHost   ActionType = "unisolate_host"
+
+	// User management actions
 	ActionDisableUser     ActionType = "disable_user"
 	ActionEnableUser      ActionType = "enable_user"
-	ActionCollectForensics ActionType = "collect_forensics"
-	ActionThreatHunt      ActionType = "threat_hunt"
+
+	// Process management actions
 	ActionKillProcess     ActionType = "kill_process"
+
+	// Investigation actions
+	ActionDNSLookup         ActionType = "dns_lookup"
+	ActionSearchIOC         ActionType = "search_ioc"
+	ActionCheckHash         ActionType = "check_hash"
+	ActionCheckIPReputation ActionType = "check_ip_reputation"
+
+	// Forensics actions
+	ActionCollectForensics ActionType = "collect_forensics"
+	ActionThreatHunt       ActionType = "threat_hunt"
 )
 
 // Platform represents the target platform for actions.

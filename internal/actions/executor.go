@@ -170,11 +170,22 @@ func (e *Executor) ListActions() []string {
 
 // registerBuiltinActions registers the built-in actions.
 func (e *Executor) registerBuiltinActions() {
+	// Firewall/Network actions
 	e.Register(NewBlockIPAction(e.logger))
 	e.Register(NewUnblockIPAction(e.logger))
 	e.Register(NewIsolateHostAction(e.logger))
 	e.Register(NewUnisolateHostAction(e.logger))
+
+	// User management actions
 	e.Register(NewDisableUserAction(e.logger))
 	e.Register(NewEnableUserAction(e.logger))
+
+	// Process management actions
 	e.Register(NewKillProcessAction(e.logger))
+
+	// Investigation actions
+	e.Register(NewDNSLookupAction(e.logger))
+	e.Register(NewSearchIOCAction(e.logger))
+	e.Register(NewCheckHashAction(e.logger))
+	e.Register(NewCheckIPReputationAction(e.logger))
 }
