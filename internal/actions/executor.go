@@ -4,6 +4,7 @@ package actions
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,43 @@ import (
 	"github.com/cisec/aisac-agent/internal/config"
 	"github.com/cisec/aisac-agent/pkg/types"
 )
+
+// sensitiveParamKeys contains parameter keys that should be redacted in logs.
+var sensitiveParamKeys = map[string]bool{
+	"api_key":             true,
+	"apikey":              true,
+	"api-key":             true,
+	"token":               true,
+	"password":            true,
+	"secret":              true,
+	"credential":          true,
+	"virustotal_api_key":  true,
+	"otx_api_key":         true,
+	"abuseipdb_api_key":   true,
+	"auth_token":          true,
+}
+
+// sanitizeParamsForLogging removes sensitive values from params before logging.
+func sanitizeParamsForLogging(params map[string]interface{}) map[string]interface{} {
+	sanitized := make(map[string]interface{}, len(params))
+	for key, value := range params {
+		lowerKey := strings.ToLower(key)
+		// Check if key contains any sensitive pattern
+		isSensitive := false
+		for sensitiveKey := range sensitiveParamKeys {
+			if strings.Contains(lowerKey, sensitiveKey) {
+				isSensitive = true
+				break
+			}
+		}
+		if isSensitive {
+			sanitized[key] = "[REDACTED]"
+		} else {
+			sanitized[key] = value
+		}
+	}
+	return sanitized
+}
 
 // rateLimitEntry tracks rate limit state for an action.
 type rateLimitEntry struct {
@@ -97,7 +135,9 @@ func (e *Executor) Execute(ctx context.Context, actionType types.ActionType, par
 		Str("execution_id", actCtx.ExecutionID).
 		Logger()
 
-	logger.Info().Interface("params", params).Msg("Executing action")
+	// SECURITY: Sanitize params before logging to prevent exposing secrets
+	safeParams := sanitizeParamsForLogging(params)
+	logger.Info().Interface("params", safeParams).Msg("Executing action")
 
 	result, err := action.Execute(ctx, params, actCtx)
 	if err != nil {

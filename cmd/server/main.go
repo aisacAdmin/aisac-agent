@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -502,7 +503,8 @@ func (s *Server) apiAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token != s.apiToken {
+		// SECURITY: Use constant-time comparison to prevent timing attacks
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) != 1 {
 			s.logger.Warn().Str("remote", r.RemoteAddr).Msg("Invalid API token")
 			http.Error(w, "Invalid token", http.StatusUnauthorized)
 			return

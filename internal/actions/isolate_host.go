@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"fmt"
+	"net"
 	"runtime"
 
 	"github.com/rs/zerolog"
@@ -32,13 +33,30 @@ func (a *IsolateHostAction) Name() types.ActionType {
 func (a *IsolateHostAction) Validate(params map[string]interface{}) error {
 	// allow_ips is optional but must be a valid list if provided
 	if allowIPs, ok := params["allow_ips"]; ok {
+		var ips []string
 		switch v := allowIPs.(type) {
 		case []interface{}:
-			// Valid
+			for _, ip := range v {
+				if ipStr, ok := ip.(string); ok {
+					ips = append(ips, ipStr)
+				}
+			}
 		case []string:
-			// Valid
+			ips = v
 		default:
 			return fmt.Errorf("allow_ips must be a list of IP addresses, got %T", v)
+		}
+
+		// SECURITY: Validate each IP address
+		for _, ipStr := range ips {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				return fmt.Errorf("invalid IP address in allow_ips: %s", ipStr)
+			}
+			// Validate IP is safe (using same validation as block_ip)
+			if err := validateIPForBlocking(ip); err != nil {
+				return fmt.Errorf("invalid IP in allow_ips: %w", err)
+			}
 		}
 	}
 	return nil

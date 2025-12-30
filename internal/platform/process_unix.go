@@ -8,10 +8,33 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 )
+
+// processNameRegex validates process names to prevent command injection.
+// Allows alphanumeric, dash, underscore, dot, and forward slash (for paths).
+var processNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-./]+$`)
+
+// validateProcessName validates a process name for safety.
+func validateProcessName(name string) error {
+	if name == "" {
+		return fmt.Errorf("process name cannot be empty")
+	}
+	if len(name) > 256 {
+		return fmt.Errorf("process name too long (max 256 characters)")
+	}
+	if !processNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid process name: contains disallowed characters")
+	}
+	// Prevent path traversal
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("invalid process name: path traversal not allowed")
+	}
+	return nil
+}
 
 // UnixProcessManager implements ProcessManager for Unix systems.
 type UnixProcessManager struct{}
@@ -51,6 +74,11 @@ func (m *UnixProcessManager) KillProcess(ctx context.Context, pid int) error {
 
 // KillProcessByName kills processes by name.
 func (m *UnixProcessManager) KillProcessByName(ctx context.Context, name string, killAll bool) ([]int, error) {
+	// SECURITY: Validate process name to prevent command injection
+	if err := validateProcessName(name); err != nil {
+		return nil, fmt.Errorf("invalid process name: %w", err)
+	}
+
 	// Find processes by name
 	pids, err := m.findProcessesByName(ctx, name)
 	if err != nil {

@@ -90,6 +90,11 @@ func (a *BlockIPAction) Execute(ctx context.Context, params map[string]interface
 
 	direction := "both"
 	if d, ok := params["direction"].(string); ok {
+		// SECURITY: Validate direction value
+		validDirections := map[string]bool{"inbound": true, "outbound": true, "both": true}
+		if !validDirections[d] {
+			return types.ActionResult{}, fmt.Errorf("invalid direction: %s (valid: inbound, outbound, both)", d)
+		}
 		direction = d
 	}
 

@@ -6,8 +6,27 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+// usernameRegex validates usernames to prevent command injection.
+// POSIX usernames: start with letter or underscore, followed by alphanumeric, underscore, or dash.
+var usernameRegex = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
+
+// validateUsername validates a username for safety.
+func validateUsername(username string) error {
+	if username == "" {
+		return fmt.Errorf("username cannot be empty")
+	}
+	if len(username) > 32 {
+		return fmt.Errorf("username too long (max 32 characters)")
+	}
+	if !usernameRegex.MatchString(username) {
+		return fmt.Errorf("invalid username format: must be a valid POSIX username")
+	}
+	return nil
+}
 
 // LinuxUserManager implements UserManager for Linux.
 type LinuxUserManager struct{}
@@ -19,6 +38,11 @@ func NewLinuxUserManager() (*LinuxUserManager, error) {
 
 // DisableUser disables a user account.
 func (m *LinuxUserManager) DisableUser(ctx context.Context, username string, forceLogout bool) error {
+	// SECURITY: Validate username to prevent command injection
+	if err := validateUsername(username); err != nil {
+		return fmt.Errorf("invalid username: %w", err)
+	}
+
 	// Lock the account
 	cmd := exec.CommandContext(ctx, "usermod", "-L", username)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -47,6 +71,11 @@ func (m *LinuxUserManager) DisableUser(ctx context.Context, username string, for
 
 // EnableUser enables a user account.
 func (m *LinuxUserManager) EnableUser(ctx context.Context, username string) error {
+	// SECURITY: Validate username to prevent command injection
+	if err := validateUsername(username); err != nil {
+		return fmt.Errorf("invalid username: %w", err)
+	}
+
 	// Unlock the account
 	cmd := exec.CommandContext(ctx, "usermod", "-U", username)
 	if output, err := cmd.CombinedOutput(); err != nil {

@@ -20,6 +20,60 @@ import (
 	"github.com/cisec/aisac-agent/pkg/types"
 )
 
+// allowedSearchPaths defines directories that are safe to search for hash matching.
+// This prevents path traversal attacks by restricting searches to specific locations.
+var allowedSearchPaths = map[string]bool{
+	"/tmp":       true,
+	"/var/tmp":   true,
+	"/home":      true,
+	"/opt":       true,
+	"/usr/bin":   true,
+	"/usr/local": true,
+}
+
+// validateSearchPath validates that a search path is allowed and safe.
+func validateSearchPath(path string) error {
+	// Clean the path to prevent traversal
+	cleanPath := filepath.Clean(path)
+
+	// Check for path traversal attempts
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path traversal not allowed: %s", path)
+	}
+
+	// Path must be absolute
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("path must be absolute: %s", path)
+	}
+
+	// Check against allowed paths
+	allowed := false
+	for allowedPath := range allowedSearchPaths {
+		if cleanPath == allowedPath || strings.HasPrefix(cleanPath, allowedPath+"/") {
+			allowed = true
+			break
+		}
+	}
+
+	if !allowed {
+		return fmt.Errorf("path not in allowed list: %s (allowed: /tmp, /var/tmp, /home, /opt, /usr/bin, /usr/local)", path)
+	}
+
+	// Prevent access to sensitive directories within allowed paths
+	sensitivePatterns := []string{
+		"/.ssh", "/shadow", "/passwd", "/.gnupg",
+		"/private", "/secrets", "/.aws", "/.kube",
+	}
+	lowerPath := strings.ToLower(cleanPath)
+	for _, pattern := range sensitivePatterns {
+		if strings.Contains(lowerPath, pattern) {
+			return fmt.Errorf("access to sensitive directory not allowed: %s", path)
+		}
+	}
+
+	return nil
+}
+
 // CheckHashAction checks a file hash against threat intelligence and local files.
 type CheckHashAction struct {
 	logger     zerolog.Logger
@@ -97,12 +151,25 @@ func (a *CheckHashAction) Execute(ctx context.Context, params map[string]interfa
 	// Determine hash type
 	hashType := detectHashType(hash)
 
-	// Get search paths (default to common locations)
-	searchPaths := []string{"/tmp", "/var/tmp", "/home", "/root", "/opt"}
+	// Get search paths (default to safe locations)
+	searchPaths := []string{"/tmp", "/var/tmp", "/home", "/opt"}
 	if paths, ok := params["search_paths"].([]interface{}); ok {
-		searchPaths = make([]string, len(paths))
-		for i, p := range paths {
-			searchPaths[i] = p.(string)
+		searchPaths = make([]string, 0, len(paths))
+		for _, p := range paths {
+			pathStr, ok := p.(string)
+			if !ok {
+				continue
+			}
+			// SECURITY: Validate each path to prevent path traversal
+			if err := validateSearchPath(pathStr); err != nil {
+				a.logger.Warn().Str("path", pathStr).Err(err).Msg("Skipping invalid search path")
+				continue
+			}
+			searchPaths = append(searchPaths, filepath.Clean(pathStr))
+		}
+		// If no valid paths provided, use defaults
+		if len(searchPaths) == 0 {
+			searchPaths = []string{"/tmp", "/var/tmp", "/home", "/opt"}
 		}
 	}
 
