@@ -258,17 +258,25 @@ func detectHashType(hash string) string {
 }
 
 // searchLocalFiles searches for files matching the given hash.
+// SECURITY: Implements multiple DoS protections:
+// - Maximum files to check (10,000)
+// - Maximum matches to return (100)
+// - Maximum file size (50MB)
+// - Context cancellation support
 func (a *CheckHashAction) searchLocalFiles(ctx context.Context, targetHash, hashType string, searchPaths []string) []HashMatch {
 	var matches []HashMatch
-	maxFilesToCheck := 10000
+	const maxFilesToCheck = 10000
+	const maxMatches = 100
+	const maxFileSize = 50 * 1024 * 1024 // 50MB - reduced from 100MB
 	filesChecked := 0
 
 	for _, basePath := range searchPaths {
-		if filesChecked >= maxFilesToCheck {
+		if filesChecked >= maxFilesToCheck || len(matches) >= maxMatches {
 			break
 		}
 
 		filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+			// Check context for cancellation
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -279,13 +287,18 @@ func (a *CheckHashAction) searchLocalFiles(ctx context.Context, targetHash, hash
 				return nil
 			}
 
-			// Skip very large files (> 100MB) and special files
-			if info.Size() > 100*1024*1024 || info.Size() == 0 {
+			// Skip large files and empty files
+			if info.Size() > maxFileSize || info.Size() == 0 {
+				return nil
+			}
+
+			// Skip symlinks to prevent traversal attacks
+			if info.Mode()&os.ModeSymlink != 0 {
 				return nil
 			}
 
 			filesChecked++
-			if filesChecked >= maxFilesToCheck {
+			if filesChecked >= maxFilesToCheck || len(matches) >= maxMatches {
 				return filepath.SkipAll
 			}
 

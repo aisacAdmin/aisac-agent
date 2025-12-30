@@ -75,6 +75,13 @@ type Client struct {
 
 // NewClient creates a new callback client.
 func NewClient(cfg *CallbackConfig, logger zerolog.Logger) *Client {
+	l := logger.With().Str("component", "callback").Logger()
+
+	// SECURITY: Warn about InsecureSkipVerify - should never be used in production
+	if cfg.SkipTLSVerify && cfg.Enabled {
+		l.Warn().Msg("SECURITY WARNING: TLS certificate verification disabled for callbacks (skip_tls_verify=true). This is vulnerable to MITM attacks. Only use for development/testing!")
+	}
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: cfg.SkipTLSVerify,
@@ -83,7 +90,7 @@ func NewClient(cfg *CallbackConfig, logger zerolog.Logger) *Client {
 
 	return &Client{
 		cfg:    cfg,
-		logger: logger.With().Str("component", "callback").Logger(),
+		logger: l,
 		httpClient: &http.Client{
 			Timeout:   cfg.Timeout,
 			Transport: transport,

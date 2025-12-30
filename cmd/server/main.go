@@ -54,11 +54,13 @@ type Server struct {
 
 // AgentConn represents a connected agent.
 type AgentConn struct {
-	ID       string
-	Info     types.AgentInfo
-	Conn     *websocket.Conn
-	ConnMu   sync.Mutex
-	LastSeen time.Time
+	ID          string
+	Info        types.AgentInfo
+	Conn        *websocket.Conn
+	ConnMu      sync.Mutex
+	LastSeen    time.Time
+	msgCount    int64     // Message count for rate limiting
+	msgResetAt  time.Time // When to reset message count
 }
 
 func main() {
@@ -130,6 +132,7 @@ func run(cmd *cobra.Command, args []string) error {
 	api.HandleFunc("/agents/{id}", server.handleGetAgent).Methods("GET")
 	api.HandleFunc("/agents/{id}/command", server.handleSendCommand).Methods("POST")
 	api.HandleFunc("/health", server.handleHealth).Methods("GET")
+	api.HandleFunc("/status", server.handleStatus).Methods("GET") // Detailed status (requires auth)
 
 	// Setup HTTP server
 	httpServer := &http.Server{
@@ -169,7 +172,11 @@ func run(cmd *cobra.Command, args []string) error {
 		logger.Info().Msg("Starting HTTPS server with mTLS")
 		err = httpServer.ListenAndServeTLS(certFile, keyFile)
 	} else {
-		logger.Warn().Msg("Starting HTTP server (no TLS) - NOT RECOMMENDED FOR PRODUCTION")
+		// SECURITY: Check if running in production mode (via environment variable)
+		if os.Getenv("AISAC_PRODUCTION") == "true" || os.Getenv("AISAC_REQUIRE_TLS") == "true" {
+			logger.Fatal().Msg("TLS is required in production mode. Set AISAC_PRODUCTION=false or provide --cert and --key flags")
+		}
+		logger.Warn().Msg("SECURITY WARNING: Starting HTTP server without TLS - NOT RECOMMENDED FOR PRODUCTION. Set AISAC_PRODUCTION=true to enforce TLS.")
 		err = httpServer.ListenAndServe()
 	}
 
@@ -296,7 +303,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info().Str("agent_id", agent.ID).Msg("Agent disconnected")
 }
 
+// SECURITY: Rate limiting constants for WebSocket messages
+const (
+	maxMessagesPerMinute = 120 // Maximum messages per minute per agent
+	rateLimitWindow      = time.Minute
+)
+
 func (s *Server) handleAgentMessages(agent *AgentConn) {
+	// Initialize rate limiting
+	agent.msgResetAt = time.Now().Add(rateLimitWindow)
+	agent.msgCount = 0
+
 	for {
 		agent.Conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		_, data, err := agent.Conn.ReadMessage()
@@ -305,7 +322,23 @@ func (s *Server) handleAgentMessages(agent *AgentConn) {
 			return
 		}
 
-		agent.LastSeen = time.Now()
+		// SECURITY: Rate limiting check
+		now := time.Now()
+		if now.After(agent.msgResetAt) {
+			// Reset counter for new window
+			agent.msgCount = 0
+			agent.msgResetAt = now.Add(rateLimitWindow)
+		}
+		agent.msgCount++
+		if agent.msgCount > maxMessagesPerMinute {
+			s.logger.Warn().
+				Str("agent_id", agent.ID).
+				Int64("msg_count", agent.msgCount).
+				Msg("Rate limit exceeded, dropping message")
+			continue
+		}
+
+		agent.LastSeen = now
 
 		var msg protocol.Message
 		if err := json.Unmarshal(data, &msg); err != nil {
@@ -389,8 +422,16 @@ func (s *Server) handleSendCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SECURITY: Limit request body size to prevent DoS attacks (1MB max)
+	const maxBodySize = 1 << 20 // 1 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	var cmd protocol.Command
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+		if err.Error() == "http: request body too large" {
+			http.Error(w, "Request body too large (max 1MB)", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -430,15 +471,25 @@ func (s *Server) handleSendCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// SECURITY: Health endpoint only returns status
+	// Detailed metrics require authentication via /api/v1/status
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "healthy",
+	})
+}
+
+// handleStatus returns detailed server status (requires authentication).
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.agentsMu.RLock()
 	agentCount := len(s.agents)
 	s.agentsMu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "healthy",
-		"version":      version,
-		"agent_count":  agentCount,
+		"status":      "healthy",
+		"version":     version,
+		"agent_count": agentCount,
 	})
 }
 

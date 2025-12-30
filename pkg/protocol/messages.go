@@ -2,6 +2,8 @@
 package protocol
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 
@@ -111,7 +113,13 @@ func (m *Message) ParsePayload(target interface{}) error {
 	return json.Unmarshal(m.Payload, target)
 }
 
-// generateID generates a unique message ID.
+// generateID generates a cryptographically secure unique message ID.
+// SECURITY: Uses crypto/rand instead of timestamp to prevent prediction attacks.
 func generateID() string {
-	return time.Now().Format("20060102150405.000000000")
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID only if crypto/rand fails
+		return "msg-" + time.Now().Format("20060102150405.000000000")
+	}
+	return hex.EncodeToString(b)
 }

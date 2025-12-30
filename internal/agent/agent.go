@@ -213,6 +213,11 @@ func (a *Agent) buildTLSConfig() (*tls.Config, error) {
 		return nil, fmt.Errorf("failed to parse CA certificate")
 	}
 
+	// SECURITY: Warn about InsecureSkipVerify - this should never be used in production
+	if a.cfg.TLS.SkipVerify {
+		a.logger.Warn().Msg("SECURITY WARNING: TLS certificate verification is disabled (skip_verify=true). This makes the connection vulnerable to MITM attacks. Only use this for development/testing!")
+	}
+
 	return &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		RootCAs:            caCertPool,
