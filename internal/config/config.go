@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cisec/aisac-agent/internal/collector"
+	"github.com/cisec/aisac-agent/internal/heartbeat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,6 +19,7 @@ type AgentConfig struct {
 	Actions   ActionsSettings   `yaml:"actions"`
 	Callback  CallbackSettings  `yaml:"callback"`
 	Collector collector.Config  `yaml:"collector"`
+	Heartbeat heartbeat.Config  `yaml:"heartbeat"`
 	Logging   LoggingSettings   `yaml:"logging"`
 }
 
@@ -117,6 +119,7 @@ func DefaultAgentConfig() *AgentConfig {
 			RetryDelay:    5 * time.Second,
 		},
 		Collector: *collector.DefaultConfig(),
+		Heartbeat: heartbeat.DefaultConfig(),
 		Logging: LoggingSettings{
 			Level:  "info",
 			Format: "json",
@@ -175,9 +178,21 @@ func (c *AgentConfig) applyEnvOverrides() {
 	}
 	if apiKey := os.Getenv("AISAC_API_KEY"); apiKey != "" {
 		c.Collector.Output.APIKey = apiKey
+		// Also use for heartbeat if not separately configured
+		if c.Heartbeat.APIKey == "" {
+			c.Heartbeat.APIKey = apiKey
+		}
 	}
 	if ingestURL := os.Getenv("AISAC_INGEST_URL"); ingestURL != "" {
 		c.Collector.Output.URL = ingestURL
+	}
+
+	// Heartbeat environment overrides
+	if assetID := os.Getenv("AISAC_ASSET_ID"); assetID != "" {
+		c.Heartbeat.AssetID = assetID
+	}
+	if heartbeatURL := os.Getenv("AISAC_HEARTBEAT_URL"); heartbeatURL != "" {
+		c.Heartbeat.URL = heartbeatURL
 	}
 }
 
@@ -202,6 +217,11 @@ func (c *AgentConfig) Validate() error {
 	// Validate collector config
 	if err := c.Collector.Validate(); err != nil {
 		return fmt.Errorf("collector config: %w", err)
+	}
+
+	// Validate heartbeat config
+	if err := c.Heartbeat.Validate(); err != nil {
+		return fmt.Errorf("heartbeat config: %w", err)
 	}
 
 	return nil

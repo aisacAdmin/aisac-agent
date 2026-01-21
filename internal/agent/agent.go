@@ -20,6 +20,7 @@ import (
 	"github.com/cisec/aisac-agent/internal/callback"
 	"github.com/cisec/aisac-agent/internal/collector"
 	"github.com/cisec/aisac-agent/internal/config"
+	"github.com/cisec/aisac-agent/internal/heartbeat"
 	"github.com/cisec/aisac-agent/pkg/protocol"
 	"github.com/cisec/aisac-agent/pkg/types"
 )
@@ -36,6 +37,7 @@ type Agent struct {
 	executor   *actions.Executor
 	callback   *callback.Client
 	collector  *collector.Collector
+	heartbeat  *heartbeat.Client
 	info       types.AgentInfo
 	infoMu     sync.RWMutex // Protects info.Status
 
@@ -105,6 +107,15 @@ func New(cfg *config.AgentConfig, logger zerolog.Logger) (*Agent, error) {
 		logger.Info().Msg("Log collector initialized")
 	}
 
+	// Initialize heartbeat client if enabled
+	if cfg.Heartbeat.Enabled {
+		agent.heartbeat = heartbeat.NewClient(cfg.Heartbeat, Version, logger)
+		logger.Info().
+			Str("asset_id", cfg.Heartbeat.AssetID).
+			Dur("interval", cfg.Heartbeat.Interval).
+			Msg("Heartbeat client initialized")
+	}
+
 	return agent, nil
 }
 
@@ -119,6 +130,13 @@ func (a *Agent) Run() error {
 	if a.collector != nil {
 		if err := a.collector.Start(a.ctx); err != nil {
 			a.logger.Error().Err(err).Msg("Failed to start collector")
+		}
+	}
+
+	// Start heartbeat if enabled (runs independently of server connection)
+	if a.heartbeat != nil {
+		if err := a.heartbeat.Start(a.ctx); err != nil {
+			a.logger.Error().Err(err).Msg("Failed to start heartbeat")
 		}
 	}
 
