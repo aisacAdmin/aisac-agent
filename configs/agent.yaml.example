@@ -81,6 +81,76 @@ callback:
   # Skip TLS verification (NOT RECOMMENDED)
   skip_tls_verify: false
 
+# Log collector configuration (SIEM functionality)
+collector:
+  # Enable log collection
+  enabled: false
+
+  # Tenant ID (OPTIONAL) - For multi-tenant environments
+  # When using API Key authentication, the tenant is automatically
+  # derived from the monitored_asset associated with the API Key.
+  # Only set this if you need to override the automatic tenant detection.
+  # tenant_id: ""
+
+  # Log sources to collect
+  sources:
+    # Suricata EVE JSON logs
+    - name: suricata
+      type: file
+      path: /var/log/suricata/eve.json
+      parser: suricata_eve
+      tags:
+        - security
+        - ids
+
+    # System syslog
+    - name: syslog
+      type: file
+      path: /var/log/syslog
+      parser: syslog
+      tags:
+        - system
+
+    # Generic JSON logs
+    # - name: app_logs
+    #   type: file
+    #   path: /var/log/myapp/*.json
+    #   parser: json
+    #   tags:
+    #     - application
+
+  # Output configuration
+  output:
+    # Output type: http
+    type: http
+    # Ingest endpoint URL
+    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    # API Key for authentication (format: aisac_xxxx...)
+    # Get this from the AISAC Platform when registering this asset
+    api_key: "aisac_your_api_key_here"
+    # Request timeout
+    timeout: 30s
+    # Number of retry attempts
+    retry_attempts: 3
+    # Delay between retries
+    retry_delay: 5s
+    # Skip TLS verification (NOT RECOMMENDED)
+    skip_tls_verify: false
+
+  # Batching configuration
+  batch:
+    # Number of events per batch
+    size: 100
+    # Maximum time before flushing (even if batch not full)
+    interval: 5s
+
+  # File reading configuration
+  file:
+    # Start position for new files: "end" or "beginning"
+    start_position: end
+    # Path to store file positions (for resume after restart)
+    sincedb_path: /var/lib/aisac/sincedb.json
+
 logging:
   # Log level: debug, info, warn, error
   level: "info"

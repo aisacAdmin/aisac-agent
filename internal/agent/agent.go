@@ -18,6 +18,7 @@ import (
 
 	"github.com/cisec/aisac-agent/internal/actions"
 	"github.com/cisec/aisac-agent/internal/callback"
+	"github.com/cisec/aisac-agent/internal/collector"
 	"github.com/cisec/aisac-agent/internal/config"
 	"github.com/cisec/aisac-agent/pkg/protocol"
 	"github.com/cisec/aisac-agent/pkg/types"
@@ -34,6 +35,7 @@ type Agent struct {
 	connMu     sync.Mutex
 	executor   *actions.Executor
 	callback   *callback.Client
+	collector  *collector.Collector
 	info       types.AgentInfo
 	infoMu     sync.RWMutex // Protects info.Status
 
@@ -92,6 +94,17 @@ func New(cfg *config.AgentConfig, logger zerolog.Logger) (*Agent, error) {
 	}
 	agent.callback = callback.NewClient(callbackCfg, logger)
 
+	// Initialize log collector if enabled
+	if cfg.Collector.Enabled {
+		col, err := collector.New(cfg.Collector, logger)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("creating collector: %w", err)
+		}
+		agent.collector = col
+		logger.Info().Msg("Log collector initialized")
+	}
+
 	return agent, nil
 }
 
@@ -101,6 +114,13 @@ func (a *Agent) Run() error {
 		Str("agent_id", a.info.ID).
 		Str("version", Version).
 		Msg("Starting AISAC agent")
+
+	// Start collector if enabled (runs independently of server connection)
+	if a.collector != nil {
+		if err := a.collector.Start(a.ctx); err != nil {
+			a.logger.Error().Err(err).Msg("Failed to start collector")
+		}
+	}
 
 	for {
 		select {
@@ -160,6 +180,13 @@ func (a *Agent) Shutdown() {
 		cancel()
 	}
 	a.activeTasksMu.Unlock()
+
+	// Stop collector if running
+	if a.collector != nil {
+		if err := a.collector.Stop(); err != nil {
+			a.logger.Error().Err(err).Msg("Failed to stop collector")
+		}
+	}
 
 	a.closeConn()
 	a.wg.Wait()

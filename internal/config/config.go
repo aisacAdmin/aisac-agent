@@ -6,17 +6,19 @@ import (
 	"os"
 	"time"
 
+	"github.com/cisec/aisac-agent/internal/collector"
 	"gopkg.in/yaml.v3"
 )
 
 // AgentConfig holds the agent configuration.
 type AgentConfig struct {
-	Agent    AgentSettings    `yaml:"agent"`
-	Server   ServerSettings   `yaml:"server"`
-	TLS      TLSSettings      `yaml:"tls"`
-	Actions  ActionsSettings  `yaml:"actions"`
-	Callback CallbackSettings `yaml:"callback"`
-	Logging  LoggingSettings  `yaml:"logging"`
+	Agent     AgentSettings     `yaml:"agent"`
+	Server    ServerSettings    `yaml:"server"`
+	TLS       TLSSettings       `yaml:"tls"`
+	Actions   ActionsSettings   `yaml:"actions"`
+	Callback  CallbackSettings  `yaml:"callback"`
+	Collector collector.Config  `yaml:"collector"`
+	Logging   LoggingSettings   `yaml:"logging"`
 }
 
 // AgentSettings contains agent-specific settings.
@@ -114,6 +116,7 @@ func DefaultAgentConfig() *AgentConfig {
 			RetryAttempts: 3,
 			RetryDelay:    5 * time.Second,
 		},
+		Collector: *collector.DefaultConfig(),
 		Logging: LoggingSettings{
 			Level:  "info",
 			Format: "json",
@@ -165,6 +168,17 @@ func (c *AgentConfig) applyEnvOverrides() {
 	if level := os.Getenv("AISAC_LOG_LEVEL"); level != "" {
 		c.Logging.Level = level
 	}
+
+	// Collector environment overrides
+	if tenantID := os.Getenv("AISAC_TENANT_ID"); tenantID != "" {
+		c.Collector.TenantID = tenantID
+	}
+	if apiKey := os.Getenv("AISAC_API_KEY"); apiKey != "" {
+		c.Collector.Output.APIKey = apiKey
+	}
+	if ingestURL := os.Getenv("AISAC_INGEST_URL"); ingestURL != "" {
+		c.Collector.Output.URL = ingestURL
+	}
 }
 
 // Validate validates the configuration.
@@ -183,6 +197,11 @@ func (c *AgentConfig) Validate() error {
 		if c.TLS.CAFile == "" {
 			return fmt.Errorf("TLS ca_file is required when TLS is enabled")
 		}
+	}
+
+	// Validate collector config
+	if err := c.Collector.Validate(); err != nil {
+		return fmt.Errorf("collector config: %w", err)
 	}
 
 	return nil
