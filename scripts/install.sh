@@ -25,6 +25,7 @@ BINARY_NAME="aisac-agent"
 # Default values
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
 
 #------------------------------------------------------------------------------
 # Helper functions
@@ -270,6 +271,47 @@ configure_agent() {
     else
         COLLECTOR_ENABLED=false
     fi
+
+    # Heartbeat Configuration
+    echo ""
+    echo -e "${YELLOW}--- Heartbeat Configuration (Status Reporting) ---${NC}"
+
+    if prompt_yes_no "Enable Heartbeat (report agent status to AISAC platform)?" "y"; then
+        HEARTBEAT_ENABLED=true
+
+        echo ""
+        echo -e "${BLUE}Heartbeat reports agent status and system metrics to the platform.${NC}"
+        echo ""
+
+        # If API Key was already provided for collector, reuse it
+        if [ -z "$API_KEY" ] || [ "$API_KEY" = "aisac_your_api_key_here" ]; then
+            echo -e "${BLUE}You need an API Key from the AISAC Platform.${NC}"
+            echo -e "${BLUE}Get it from: Platform > Assets > [Your Asset] > API Key${NC}"
+            echo ""
+            API_KEY=$(prompt_password "API Key (format: aisac_xxxx...)")
+
+            if [ -z "$API_KEY" ]; then
+                log_warning "No API Key provided. You'll need to add it later in the config file."
+                API_KEY="aisac_your_api_key_here"
+            fi
+        fi
+
+        echo ""
+        echo -e "${BLUE}You need the Asset ID (UUID) from the AISAC Platform.${NC}"
+        echo -e "${BLUE}Get it from: Platform > Assets > [Your Asset] > Asset ID${NC}"
+        echo ""
+
+        ASSET_ID=$(prompt "Asset ID (UUID)")
+
+        if [ -z "$ASSET_ID" ]; then
+            log_warning "No Asset ID provided. You'll need to add it later in the config file."
+            ASSET_ID="your-asset-uuid-here"
+        fi
+
+        HEARTBEAT_URL=$(prompt "Heartbeat URL" "$DEFAULT_HEARTBEAT_URL")
+    else
+        HEARTBEAT_ENABLED=false
+    fi
 }
 
 generate_config() {
@@ -327,6 +369,15 @@ callback:
   timeout: 30s
   retry_attempts: 3
   retry_delay: 5s
+
+heartbeat:
+  enabled: ${HEARTBEAT_ENABLED:-false}
+  url: "${HEARTBEAT_URL:-$DEFAULT_HEARTBEAT_URL}"
+  api_key: "${API_KEY:-aisac_your_api_key_here}"
+  asset_id: "${ASSET_ID:-your-asset-uuid-here}"
+  interval: 120s
+  timeout: 10s
+  skip_tls_verify: false
 
 collector:
   enabled: ${COLLECTOR_ENABLED}
@@ -471,8 +522,13 @@ print_summary() {
     echo -e "    Config:  ${CYAN}nano ${CONFIG_DIR}/agent.yaml${NC}"
     echo ""
 
-    if [ "$COLLECTOR_ENABLED" = "true" ] && [ "$API_KEY" = "aisac_your_api_key_here" ]; then
+    if [ "$API_KEY" = "aisac_your_api_key_here" ]; then
         echo -e "  ${YELLOW}IMPORTANT:${NC} Don't forget to add your API Key to the config file!"
+        echo ""
+    fi
+
+    if [ "$HEARTBEAT_ENABLED" = "true" ] && [ "$ASSET_ID" = "your-asset-uuid-here" ]; then
+        echo -e "  ${YELLOW}IMPORTANT:${NC} Don't forget to add your Asset ID to the config file!"
         echo ""
     fi
 
