@@ -26,6 +26,7 @@ BINARY_NAME="aisac-agent"
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/functions/v1/syslog-ingest"
 DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
+SERVICE_WAS_RUNNING=false
 
 #------------------------------------------------------------------------------
 # Helper functions
@@ -165,7 +166,14 @@ create_directories() {
 install_binary() {
     log_info "Installing AISAC Agent binary..."
 
-    # Check if binary exists in current directory or parent
+    # Stop service if running (binary might be in use)
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        log_info "Stopping running service to update binary..."
+        systemctl stop "$SERVICE_NAME"
+        SERVICE_WAS_RUNNING=true
+    fi
+
+    # Check if binary exists locally first
     local binary_path=""
 
     if [ -f "./bin/${BINARY_NAME}" ]; then
@@ -174,15 +182,56 @@ install_binary() {
         binary_path="./${BINARY_NAME}"
     elif [ -f "../bin/${BINARY_NAME}" ]; then
         binary_path="../bin/${BINARY_NAME}"
-    else
-        log_error "Binary not found. Please build it first with: make build"
-        echo ""
-        echo "Or compile for Linux with:"
-        echo "  GOOS=linux GOARCH=amd64 go build -o bin/aisac-agent ./cmd/agent"
-        exit 1
     fi
 
-    cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
+    if [ -n "$binary_path" ]; then
+        log_info "Using local binary: $binary_path"
+        cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
+    else
+        # Download from GitHub Releases
+        log_info "Downloading binary from GitHub Releases..."
+
+        local arch=$(uname -m)
+        local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+        case "$arch" in
+            x86_64)  arch="amd64" ;;
+            aarch64) arch="arm64" ;;
+            armv7l)  arch="arm" ;;
+            *)
+                log_error "Unsupported architecture: $arch"
+                exit 1
+                ;;
+        esac
+
+        local download_url="https://github.com/aisacAdmin/aisac-agent/releases/latest/download/aisac-agent-${os}-${arch}"
+
+        log_info "Downloading from: $download_url"
+
+        if command -v curl &> /dev/null; then
+            if ! curl -fsSL "$download_url" -o "$INSTALL_DIR/$BINARY_NAME"; then
+                log_error "Failed to download binary from GitHub Releases"
+                echo ""
+                echo "Options:"
+                echo "  1. Check if releases exist at: https://github.com/aisacAdmin/aisac-agent/releases"
+                echo "  2. Build locally with: make build"
+                echo "  3. Or compile for Linux with:"
+                echo "     GOOS=linux GOARCH=amd64 go build -o aisac-agent ./cmd/agent"
+                exit 1
+            fi
+        elif command -v wget &> /dev/null; then
+            if ! wget -q "$download_url" -O "$INSTALL_DIR/$BINARY_NAME"; then
+                log_error "Failed to download binary from GitHub Releases"
+                exit 1
+            fi
+        else
+            log_error "curl or wget is required to download the binary"
+            exit 1
+        fi
+
+        log_success "Binary downloaded successfully"
+    fi
+
     chmod 755 "$INSTALL_DIR/$BINARY_NAME"
 
     # Create symlink
