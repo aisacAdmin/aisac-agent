@@ -204,7 +204,7 @@ install_binary() {
                 ;;
         esac
 
-        local download_url="https://github.com/aisacAdmin/aisac-agent/releases/latest/download/aisac-agent-${os}-${arch}"
+        local download_url="https://github.com/aisacAdmin/aisac-agent/releases/download/v1.0.1/aisac-agent-${os}-${arch}"
 
         log_info "Downloading from: $download_url"
 
