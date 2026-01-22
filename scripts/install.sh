@@ -25,7 +25,7 @@ BINARY_NAME="aisac-agent"
 # Default values
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/functions/v1/syslog-ingest"
-DEFAULT_HEARTBEAT_URL="https://wjozpyhcexzcxgxwdbzr.supabase.co/functions/v1/agent-heartbeat"
+DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
 
 #------------------------------------------------------------------------------
 # Helper functions
