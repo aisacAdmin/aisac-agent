@@ -174,6 +174,7 @@ func (c *Client) run(ctx context.Context) {
 
 // sendHeartbeat sends a single heartbeat to the server.
 func (c *Client) sendHeartbeat(ctx context.Context) {
+	c.logger.Debug().Str("url", c.cfg.URL).Msg("Sending heartbeat")
 	metrics := CollectMetrics()
 
 	payload := Payload{
@@ -263,11 +264,11 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 	c.totalSent++
 	c.mu.Unlock()
 
-	c.logger.Debug().
+	c.logger.Info().
 		Float64("cpu", metrics.CPUPercent).
 		Float64("memory", metrics.MemoryPercent).
 		Float64("disk", metrics.DiskPercent).
-		Msg("Heartbeat sent")
+		Msg("Heartbeat sent successfully")
 }
 
 // recordError records a heartbeat error.
