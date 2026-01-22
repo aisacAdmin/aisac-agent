@@ -1,21 +1,113 @@
 # AISAC Agent - Deployment Guide
 
-This guide covers the complete deployment process for the AISAC Agent system, including building from source, certificate setup, server and agent deployment, SOAR integration, and security hardening.
+This guide covers the complete deployment process for the AISAC Agent system. The agent supports multiple operating modes:
+
+- **SOAR Mode**: Full incident response with command execution (requires Command Server + mTLS)
+- **Heartbeat-Only Mode**: Asset monitoring without command execution (API key authentication)
+- **Collector Mode**: Log collection and forwarding to AISAC SIEM (API key authentication)
+- **Combined Mode**: All features enabled together
 
 ## Table of Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Building from Source](#2-building-from-source)
-3. [Certificate Setup](#3-certificate-setup)
-4. [Server Deployment](#4-server-deployment)
-5. [Agent Deployment](#5-agent-deployment)
-6. [SOAR Integration](#6-soar-integration)
-7. [Security Hardening](#7-security-hardening)
-8. [Troubleshooting](#8-troubleshooting)
+1. [Quick Install](#1-quick-install)
+2. [Prerequisites](#2-prerequisites)
+3. [Building from Source](#3-building-from-source)
+4. [Certificate Setup](#4-certificate-setup) (SOAR Mode Only)
+5. [Server Deployment](#5-server-deployment) (SOAR Mode Only)
+6. [Agent Deployment](#6-agent-deployment)
+7. [Heartbeat-Only Deployment](#7-heartbeat-only-deployment)
+8. [Collector Deployment](#8-collector-deployment)
+9. [SOAR Integration](#9-soar-integration)
+10. [Security Hardening](#10-security-hardening)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
-## 1. Prerequisites
+## 1. Quick Install
+
+The fastest way to deploy AISAC Agent on Linux.
+
+### One-Line Install
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+```
+
+The installer will:
+1. Download the latest release binary from GitHub
+2. Create `/etc/aisac/` configuration directory
+3. Prompt for configuration options:
+   - Agent ID (leave empty for auto-generate)
+   - Heartbeat API Key (from AISAC Platform)
+   - Heartbeat Asset ID (from AISAC Platform)
+   - SOAR WebSocket URL (optional)
+4. Create and start the systemd service
+
+### Post-Install Configuration
+
+After installation, edit `/etc/aisac/agent.yaml` to:
+- Enable/disable features (heartbeat, collector, SOAR)
+- Configure log sources for collector
+- Adjust rate limits and timeouts
+
+```bash
+# View current configuration
+sudo cat /etc/aisac/agent.yaml
+
+# Edit configuration
+sudo nano /etc/aisac/agent.yaml
+
+# Restart to apply changes
+sudo systemctl restart aisac-agent
+
+# Check status
+sudo systemctl status aisac-agent
+sudo journalctl -u aisac-agent -f
+```
+
+### Quick Mode Selection
+
+After install, configure the mode you need:
+
+**Heartbeat-Only** (simplest):
+```yaml
+server:
+  enabled: false
+heartbeat:
+  enabled: true
+  api_key: "aisac_your_key"
+  asset_id: "your-uuid"
+collector:
+  enabled: false
+```
+
+**Collector Mode**:
+```yaml
+server:
+  enabled: false
+heartbeat:
+  enabled: false
+collector:
+  enabled: true
+  output:
+    api_key: "aisac_your_key"
+```
+
+**Full SOAR Mode** (requires certificates):
+```yaml
+server:
+  enabled: true
+  url: "wss://server:8443/ws"
+tls:
+  enabled: true
+  cert_file: "/etc/aisac/certs/agent.crt"
+  key_file: "/etc/aisac/certs/agent.key"
+  ca_file: "/etc/aisac/certs/ca.crt"
+```
+
+---
+
+## 2. Prerequisites
 
 ### Required Software
 
@@ -70,7 +162,7 @@ brew install openssl
 
 ---
 
-## 2. Building from Source
+## 3. Building from Source
 
 ### Clone the Repository
 
@@ -160,7 +252,9 @@ make docker-build
 
 ---
 
-## 3. Certificate Setup
+## 4. Certificate Setup (SOAR Mode Only)
+
+> **Note**: This section only applies if you're using SOAR mode (`server.enabled: true`). For heartbeat-only or collector modes, skip to [Section 7](#7-heartbeat-only-deployment) or [Section 8](#8-collector-deployment).
 
 AISAC uses mutual TLS (mTLS) for secure agent-server communication. You need to generate a Certificate Authority (CA) and certificates for both the server and agents.
 
@@ -317,7 +411,9 @@ openssl x509 -in agent.crt -text -noout
 
 ---
 
-## 4. Server Deployment
+## 5. Server Deployment (SOAR Mode Only)
+
+> **Note**: The Command Server is only required for SOAR mode. Skip this section if using heartbeat-only or collector modes.
 
 ### Command Line Options
 
@@ -578,7 +674,7 @@ curl -k -H "Authorization: Bearer your-secret-token-here" \
 
 ---
 
-## 5. Agent Deployment
+## 6. Agent Deployment
 
 ### Configuration File
 
@@ -903,7 +999,242 @@ export AISAC_SERVER_URL="wss://server:8443/ws"
 
 ---
 
-## 6. SOAR Integration
+## 7. Heartbeat-Only Deployment
+
+Heartbeat-only mode is the simplest deployment option. The agent reports status and system metrics to the AISAC platform without executing any commands.
+
+### Requirements
+
+- AISAC Platform API Key (format: `aisac_xxxx...`)
+- Asset ID (UUID from AISAC Platform when registering the asset)
+- No certificates or Command Server required
+
+### Minimal Configuration
+
+Create `/etc/aisac/agent.yaml`:
+
+```yaml
+agent:
+  id: ""  # Auto-generated if empty
+  labels:
+    - production
+    - webserver
+
+# Disable SOAR mode (no certificates needed)
+server:
+  enabled: false
+
+# Enable heartbeat
+heartbeat:
+  enabled: true
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  api_key: "aisac_your_api_key_here"
+  asset_id: "your-asset-uuid-here"
+  interval: 120s
+  timeout: 10s
+
+# Disable collector (optional)
+collector:
+  enabled: false
+
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
+```
+
+### Quick Setup
+
+```bash
+# Install using quick install
+curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+
+# Edit configuration for heartbeat-only mode
+sudo nano /etc/aisac/agent.yaml
+# Set server.enabled: false
+# Set heartbeat.enabled: true
+# Configure heartbeat.api_key and heartbeat.asset_id
+
+# Restart agent
+sudo systemctl restart aisac-agent
+
+# Verify heartbeat is working
+sudo journalctl -u aisac-agent -f
+# Look for: "Heartbeat sent successfully"
+```
+
+### Getting API Key and Asset ID
+
+1. Log into the AISAC Platform
+2. Navigate to **Assets** → **Add New Asset**
+3. Register your asset (hostname, IP, description)
+4. Copy the generated **Asset ID** (UUID)
+5. Navigate to **API Keys** → **Create Key**
+6. Copy the **API Key** (format: `aisac_xxxx...`)
+7. Configure both values in your agent.yaml
+
+### Verify Deployment
+
+```bash
+# Check service status
+sudo systemctl status aisac-agent
+
+# View logs
+sudo journalctl -u aisac-agent -f
+
+# Expected successful log output:
+# {"level":"info","component":"heartbeat","cpu":5.2,"memory":45.3,"disk":55.0,"message":"Heartbeat sent successfully"}
+```
+
+---
+
+## 8. Collector Deployment
+
+Collector mode enables log collection and forwarding to the AISAC SIEM platform.
+
+### Requirements
+
+- AISAC Platform API Key
+- Log sources to collect (Suricata, syslog, JSON files)
+- Network access to AISAC ingest API
+
+### Collector Configuration
+
+```yaml
+agent:
+  id: ""
+
+# Disable SOAR mode
+server:
+  enabled: false
+
+# Optional: Enable heartbeat with collector
+heartbeat:
+  enabled: true
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  api_key: "aisac_your_api_key_here"
+  asset_id: "your-asset-uuid-here"
+  interval: 120s
+
+# Enable collector
+collector:
+  enabled: true
+
+  # Log sources to collect
+  sources:
+    # Suricata EVE JSON logs (IDS/IPS)
+    - name: suricata
+      type: file
+      path: /var/log/suricata/eve.json
+      parser: suricata_eve
+      tags:
+        - security
+        - ids
+
+    # System syslog
+    - name: syslog
+      type: file
+      path: /var/log/syslog
+      parser: syslog
+      tags:
+        - system
+
+    # Auth log
+    - name: auth
+      type: file
+      path: /var/log/auth.log
+      parser: syslog
+      tags:
+        - security
+        - auth
+
+  # Output to AISAC SIEM
+  output:
+    type: http
+    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    api_key: "aisac_your_api_key_here"
+    timeout: 30s
+    retry_attempts: 3
+    retry_delay: 5s
+
+  # Batching for efficiency
+  batch:
+    size: 100       # Events per batch
+    interval: 5s    # Flush interval
+
+  # File reading settings
+  file:
+    start_position: end    # Start from end of file (or "beginning")
+    sincedb_path: /var/lib/aisac/sincedb.json
+
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
+```
+
+### Supported Log Parsers
+
+| Parser | Description | Log Format |
+|--------|-------------|------------|
+| `suricata_eve` | Suricata EVE JSON | JSON (one event per line) |
+| `syslog` | RFC3164/5424 syslog | Traditional syslog format |
+| `json` | Generic JSON logs | JSON (one event per line) |
+
+### Deploy Collector
+
+```bash
+# Install agent
+curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+
+# Configure for collector mode
+sudo nano /etc/aisac/agent.yaml
+
+# Create sincedb directory
+sudo mkdir -p /var/lib/aisac
+sudo chown root:root /var/lib/aisac
+
+# Restart agent
+sudo systemctl restart aisac-agent
+
+# Verify logs are being collected
+sudo journalctl -u aisac-agent -f
+# Look for: "Tailer started", "Batch sent successfully"
+```
+
+### Verify Collection
+
+```bash
+# Check collector is running
+sudo journalctl -u aisac-agent | grep -i collector
+
+# Expected output:
+# {"level":"info","component":"collector","message":"Collector started"}
+# {"level":"info","component":"tailer","source":"suricata","message":"Tailer started"}
+# {"level":"debug","component":"batcher","events":100,"message":"Batch sent successfully"}
+
+# Check sincedb (position tracking)
+sudo cat /var/lib/aisac/sincedb.json
+```
+
+### Troubleshooting Collector
+
+```bash
+# Check if log file exists and is readable
+ls -la /var/log/suricata/eve.json
+
+# Check file permissions
+sudo -u root cat /var/log/suricata/eve.json | head -5
+
+# Enable debug logging
+# In agent.yaml: logging.level: "debug"
+sudo systemctl restart aisac-agent
+sudo journalctl -u aisac-agent -f
+```
+
+---
+
+## 9. SOAR Integration
 
 ### n8n Webhook Configuration
 
@@ -1074,7 +1405,7 @@ serve(async (req) => {
 
 ---
 
-## 7. Security Hardening
+## 10. Security Hardening
 
 ### File Permissions
 
@@ -1267,7 +1598,7 @@ sudo nano /etc/apparmor.d/usr.local.bin.aisac-agent
 
 ---
 
-## 8. Troubleshooting
+## 11. Troubleshooting
 
 ### Common Connection Errors
 

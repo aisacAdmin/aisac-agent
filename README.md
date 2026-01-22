@@ -4,24 +4,31 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 
-**AISAC Agent** is an automated security response agent written in Go that executes incident response actions ordered by SOAR (Security Orchestration, Automation, and Response) systems. It is deployed on endpoints and servers to execute security playbooks in real-time.
+**AISAC Agent** is a versatile security agent written in Go that provides:
+
+- **SOAR Response**: Execute incident response actions ordered by SOAR systems
+- **SIEM Collection**: Collect and forward logs to the AISAC platform
+- **Asset Monitoring**: Report agent health and system metrics via heartbeat
+
+It can be deployed on endpoints and servers in multiple operating modes depending on your needs.
 
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Operating Modes](#operating-modes)
 - [Architecture](#architecture)
 - [Features](#features)
-- [Supported Actions](#supported-actions)
-- [Tech Stack](#tech-stack)
 - [Quick Start](#quick-start)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Generate Certificates](#generate-certificates)
-  - [Run the Server](#run-the-server)
-  - [Run the Agent](#run-the-agent)
+  - [Quick Install (Linux)](#quick-install-linux)
+  - [Manual Installation](#manual-installation)
 - [Configuration](#configuration)
+  - [Agent Configuration](#agent-configuration)
+  - [Heartbeat Configuration](#heartbeat-configuration)
+  - [Collector Configuration](#collector-configuration)
+  - [SOAR Configuration](#soar-configuration)
+- [Supported Actions](#supported-actions)
 - [REST API](#rest-api)
 - [Communication Protocol](#communication-protocol)
 - [Security Features](#security-features)
@@ -37,12 +44,19 @@
 
 ## Overview
 
-AISAC Agent is part of a complete incident response automation platform. The agent runs on endpoints (Linux, Windows, macOS) and connects to a central Command Server via WebSocket with mutual TLS authentication. When security incidents are detected by your SIEM/SOAR system, automated response actions are sent to agents for immediate execution.
+AISAC Agent is part of a complete security operations platform. The agent runs on endpoints (Linux, Windows, macOS) and provides three main capabilities:
+
+1. **SOAR Response Agent**: Connects to a central Command Server via WebSocket with mutual TLS authentication. When security incidents are detected by your SIEM/SOAR system, automated response actions are sent to agents for immediate execution.
+
+2. **SIEM Log Collector**: Collects logs from various sources (Suricata, syslog, JSON files) and forwards them to the AISAC platform for analysis and correlation.
+
+3. **Asset Health Monitor**: Reports agent status and system metrics (CPU, memory, disk) to the AISAC platform via heartbeat, enabling asset inventory and health monitoring.
 
 **Key Benefits:**
 - Automated incident response reduces MTTR (Mean Time To Respond)
-- Centralized command and control via REST API
-- Secure communication with mTLS authentication
+- Centralized log collection for SIEM analysis
+- Real-time asset health monitoring
+- Secure communication with mTLS or API key authentication
 - Cross-platform support (Linux, Windows, macOS)
 - Extensible action framework
 - Rate limiting and safety controls
@@ -50,58 +64,164 @@ AISAC Agent is part of a complete incident response automation platform. The age
 
 ---
 
+## Operating Modes
+
+AISAC Agent supports flexible deployment configurations:
+
+### Mode 1: Full SOAR Mode (Default)
+The agent connects to a Command Server via WebSocket to receive and execute security actions.
+
+```yaml
+server:
+  enabled: true
+  url: "wss://command-server:8443/ws"
+tls:
+  enabled: true
+  # mTLS certificates required
+```
+
+**Use case**: Endpoints requiring automated incident response capabilities.
+
+### Mode 2: Heartbeat-Only Mode
+The agent reports status to the AISAC platform without SOAR capabilities. No Command Server or mTLS certificates required.
+
+```yaml
+server:
+  enabled: false
+
+heartbeat:
+  enabled: true
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  api_key: "aisac_your_api_key_here"
+  asset_id: "your-asset-uuid-here"
+```
+
+**Use case**: Asset monitoring without command execution, lightweight deployments.
+
+### Mode 3: Collector Mode (SIEM)
+The agent collects logs and forwards them to the AISAC platform.
+
+```yaml
+server:
+  enabled: false
+
+collector:
+  enabled: true
+  sources:
+    - name: suricata
+      type: file
+      path: /var/log/suricata/eve.json
+      parser: suricata_eve
+  output:
+    type: http
+    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    api_key: "aisac_your_api_key_here"
+```
+
+**Use case**: Log collection from IDS/IPS, firewalls, and system logs.
+
+### Mode 4: Combined Mode
+All features enabled together.
+
+```yaml
+server:
+  enabled: true
+  url: "wss://command-server:8443/ws"
+
+heartbeat:
+  enabled: true
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  api_key: "aisac_your_api_key_here"
+  asset_id: "your-asset-uuid-here"
+
+collector:
+  enabled: true
+  # ... collector configuration
+```
+
+**Use case**: Full security operations with response, collection, and monitoring
+
+---
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    AISAC Platform                            │
-│              (React + Supabase + Edge Functions)             │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTPS POST (webhook)
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   n8n Workflow Engine                        │
-│              (Orchestration & Automation)                    │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTPS/REST API
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│              AISAC Command Server                            │
-│          (REST API + WebSocket Server)                       │
-│  • Agent Management                                          │
-│  • Command Dispatch                                          │
-│  • Bearer Token Authentication                               │
-└────────────────────────┬────────────────────────────────────┘
-                         │ WebSocket + mTLS
-         ┌───────────────┼───────────────┐
-         ▼               ▼               ▼
-    ┌────────┐      ┌────────┐      ┌────────┐
-    │ Agent  │      │ Agent  │      │ Agent  │
-    │(Linux) │      │(Windows)│      │(macOS) │
-    └────────┘      └────────┘      └────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        AISAC Platform                               │
+│                (React + Supabase + Edge Functions)                  │
+│  ┌─────────────────┐  ┌──────────────────┐  ┌─────────────────────┐ │
+│  │ Asset Dashboard │  │  SIEM Analytics  │  │  Incident Response  │ │
+│  └────────▲────────┘  └────────▲─────────┘  └──────────┬──────────┘ │
+└───────────┼────────────────────┼───────────────────────┼────────────┘
+            │ Heartbeat          │ Log Ingest            │ Webhook
+            │ API                │ API                   ▼
+            │                    │              ┌────────────────────┐
+            │                    │              │  n8n Workflow      │
+            │                    │              │  (Orchestration)   │
+            │                    │              └─────────┬──────────┘
+            │                    │                        │ REST API
+            │                    │                        ▼
+            │                    │              ┌────────────────────┐
+            │                    │              │  Command Server    │
+            │                    │              │  (WebSocket + API) │
+            │                    │              └─────────┬──────────┘
+            │                    │                        │ WebSocket + mTLS
+            │                    │            ┌───────────┼───────────┐
+            ▼                    ▼            ▼           ▼           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         AISAC Agent                                 │
+│  ┌──────────────┐  ┌───────────────┐  ┌───────────────────────────┐ │
+│  │   Heartbeat  │  │   Collector   │  │        Executor           │ │
+│  │   (Status)   │  │    (SIEM)     │  │        (SOAR)             │ │
+│  │              │  │               │  │                           │ │
+│  │ • CPU/Mem    │  │ • Suricata    │  │ • block_ip                │ │
+│  │ • Disk       │  │ • Syslog      │  │ • isolate_host            │ │
+│  │ • Uptime     │  │ • JSON logs   │  │ • disable_user            │ │
+│  │              │  │ • Batching    │  │ • kill_process            │ │
+│  └──────────────┘  └───────────────┘  └───────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Roles
 
-- **AISAC Platform**: Web-based security operations platform
+- **AISAC Platform**: Web-based security operations platform with dashboards, analytics, and incident management
 - **n8n Workflow Engine**: Orchestrates security workflows and triggers agent commands
-- **Command Server**: Central hub for agent management and command dispatch
-- **Agents**: Deployed on endpoints to execute security actions
+- **Command Server**: Central hub for agent management and SOAR command dispatch
+- **Agent - Heartbeat**: Reports agent health and system metrics to the platform
+- **Agent - Collector**: Collects logs from various sources and forwards to the SIEM
+- **Agent - Executor**: Executes security response actions (block IP, isolate host, etc.)
 
 ---
 
 ## Features
 
+### SOAR Response
 - **Real-time WebSocket Communication**: Persistent connections with automatic reconnection
 - **Mutual TLS Authentication**: Secure agent-server authentication using mTLS
 - **Action Framework**: Extensible system for implementing security actions
 - **Rate Limiting**: Per-action rate limits to prevent accidental overload
 - **Input Validation**: Strict validation of IP addresses, usernames, process names
 - **Protected Resources**: Prevents actions on system-critical accounts and processes
-- **Heartbeat Monitoring**: Automatic agent health checks
 - **SOAR Callbacks**: Optional webhook callbacks to external systems (n8n, SOAR platforms)
+
+### SIEM Collection
+- **Multi-source Log Collection**: Suricata EVE, syslog, generic JSON files
+- **Efficient Batching**: Configurable batch size and flush intervals
+- **Resume Support**: Sincedb tracking for position persistence across restarts
+- **File Rotation Detection**: Automatically handles log rotation
+- **HTTP Output**: Secure log forwarding to AISAC ingest API
+
+### Asset Monitoring
+- **Heartbeat Reporting**: Periodic status updates to AISAC platform
+- **System Metrics**: CPU, memory, disk usage monitoring
+- **Dynamic Intervals**: Server-controlled heartbeat frequency
+- **API Key Authentication**: Simple and secure authentication
+
+### General
+- **Multiple Operating Modes**: SOAR, collector, heartbeat, or combined
 - **Structured Logging**: JSON logging with zerolog
 - **Cross-platform**: Native support for Linux, Windows, and macOS
+- **Easy Installation**: One-command installer for Linux
 
 ---
 
@@ -172,28 +292,37 @@ AISAC Agent is part of a complete incident response automation platform. The age
 
 ## Quick Start
 
-### Prerequisites
+### Quick Install (Linux)
 
-- Go 1.21 or higher
-- OpenSSL (for certificate generation)
+The easiest way to install AISAC Agent on Linux:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+```
+
+The installer will:
+1. Download the latest release binary
+2. Create configuration directory (`/etc/aisac/`)
+3. Prompt for configuration (Agent ID, API keys, etc.)
+4. Install and start the systemd service
+
+**Post-install**: Edit `/etc/aisac/agent.yaml` to enable additional features or adjust settings.
+
+### Manual Installation
+
+#### Prerequisites
+
+- Go 1.21 or higher (for building from source)
+- OpenSSL (for certificate generation, only if using SOAR mode)
 - Root/Administrator privileges (for running agents)
 - Linux, Windows, or macOS
 
-### Installation
+#### Build from Source
 
-#### Clone the Repository
 ```bash
-git clone https://github.com/cisec/aisac-agent.git
+git clone https://github.com/Baxistart/aisac-agent.git
 cd aisac-agent
-```
-
-#### Download Dependencies
-```bash
 make deps
-```
-
-#### Build Binaries
-```bash
 make build
 ```
 
@@ -201,9 +330,18 @@ This creates:
 - `build/aisac-agent` - Agent binary
 - `build/aisac-server` - Command server binary
 
-### Generate Certificates
+#### Download Pre-built Binary
 
-For development and testing, generate self-signed certificates:
+```bash
+# Linux amd64
+curl -Lo aisac-agent https://github.com/Baxistart/aisac-agent/releases/latest/download/aisac-agent-linux-amd64
+chmod +x aisac-agent
+sudo mv aisac-agent /usr/local/bin/
+```
+
+### Generate Certificates (SOAR Mode Only)
+
+For SOAR mode with mTLS, generate certificates:
 
 ```bash
 make gen-certs
@@ -219,9 +357,9 @@ This generates:
 - `certs/agent.crt` - Agent certificate
 - `certs/agent.key` - Agent private key
 
-**Production Note**: For production deployments, use certificates from a trusted CA or your organization's PKI.
+**Note**: Certificates are NOT required for heartbeat-only or collector modes.
 
-### Run the Server
+### Run the Command Server (SOAR Mode Only)
 
 ```bash
 ./build/aisac-server \
@@ -233,37 +371,42 @@ This generates:
   --log-level info
 ```
 
-**Important**: Replace `YOUR_SECURE_TOKEN_HERE` with a strong, randomly-generated token. This token is required for REST API authentication.
-
 ### Run the Agent
 
-1. **Edit Configuration** (optional):
+#### Heartbeat-Only Mode (Simplest)
 ```bash
-cp configs/agent.yaml /etc/aisac/agent.yaml
-# Edit /etc/aisac/agent.yaml with your settings
+sudo aisac-agent --config /etc/aisac/agent.yaml
 ```
 
-2. **Start Agent**:
-```bash
-sudo ./build/aisac-agent --config /etc/aisac/agent.yaml
+With minimal config:
+```yaml
+server:
+  enabled: false
+
+heartbeat:
+  enabled: true
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  api_key: "aisac_your_api_key"
+  asset_id: "your-asset-uuid"
 ```
 
-Or using environment variables:
+#### SOAR Mode
 ```bash
 export AISAC_SERVER_URL="wss://your-server:8443/ws"
 export AISAC_CERT_FILE="/etc/aisac/certs/agent.crt"
 export AISAC_KEY_FILE="/etc/aisac/certs/agent.key"
 export AISAC_CA_FILE="/etc/aisac/certs/ca.crt"
-export AISAC_LOG_LEVEL="info"
 
-sudo ./build/aisac-agent
+sudo aisac-agent --config /etc/aisac/agent.yaml
 ```
 
 ---
 
 ## Configuration
 
-### Agent Configuration (`agent.yaml`)
+The agent is configured via YAML file (default: `/etc/aisac/agent.yaml`).
+
+### Agent Configuration
 
 ```yaml
 agent:
@@ -273,25 +416,154 @@ agent:
   labels:
     - production
     - webserver
-  # Heartbeat interval
+  # Internal heartbeat interval (WebSocket ping)
   heartbeat_interval: 30s
   # Reconnection settings
   reconnect_delay: 5s
   max_reconnect_delay: 5m
 
+logging:
+  level: "info"      # debug, info, warn, error
+  format: "json"     # json, text
+  output: "stdout"   # stdout, file
+  file: "/var/log/aisac/agent.log"
+```
+
+### Heartbeat Configuration
+
+Report agent status and metrics to the AISAC platform:
+
+```yaml
+heartbeat:
+  # Enable heartbeat reporting
+  enabled: true
+  # AISAC Platform heartbeat endpoint
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  # API Key for authentication (format: aisac_xxxx...)
+  # Get this from the AISAC Platform when registering the asset
+  api_key: "aisac_your_api_key_here"
+  # Asset ID (UUID from AISAC Platform)
+  # This identifies the monitored asset in the platform
+  asset_id: "your-asset-uuid-here"
+  # Heartbeat interval (server can override via response)
+  interval: 120s
+  # Request timeout
+  timeout: 10s
+  # Skip TLS verification (NOT RECOMMENDED)
+  skip_tls_verify: false
+```
+
+**Heartbeat Payload** (sent to server):
+```json
+{
+  "asset_id": "uuid-here",
+  "timestamp": "2024-12-04T12:34:56Z",
+  "agent_version": "1.0.1",
+  "metrics": {
+    "cpu_percent": 45.2,
+    "memory_percent": 68.5,
+    "disk_percent": 55.0,
+    "uptime_seconds": 86400
+  }
+}
+```
+
+### Collector Configuration
+
+Collect and forward logs to the AISAC SIEM:
+
+```yaml
+collector:
+  # Enable log collection
+  enabled: true
+
+  # Log sources to collect
+  sources:
+    # Suricata EVE JSON logs
+    - name: suricata
+      type: file
+      path: /var/log/suricata/eve.json
+      parser: suricata_eve
+      tags:
+        - security
+        - ids
+
+    # System syslog
+    - name: syslog
+      type: file
+      path: /var/log/syslog
+      parser: syslog
+      tags:
+        - system
+
+    # Generic JSON logs
+    - name: app_logs
+      type: file
+      path: /var/log/myapp/*.json
+      parser: json
+      tags:
+        - application
+
+  # Output configuration
+  output:
+    # Output type: http
+    type: http
+    # Ingest endpoint URL
+    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    # API Key for authentication
+    api_key: "aisac_your_api_key_here"
+    # Request timeout
+    timeout: 30s
+    # Number of retry attempts
+    retry_attempts: 3
+    # Delay between retries
+    retry_delay: 5s
+
+  # Batching configuration
+  batch:
+    # Number of events per batch
+    size: 100
+    # Maximum time before flushing (even if batch not full)
+    interval: 5s
+
+  # File reading configuration
+  file:
+    # Start position for new files: "end" or "beginning"
+    start_position: end
+    # Path to store file positions (for resume after restart)
+    sincedb_path: /var/lib/aisac/sincedb.json
+```
+
+**Supported Parsers**:
+| Parser | Description |
+|--------|-------------|
+| `suricata_eve` | Suricata EVE JSON format |
+| `syslog` | RFC3164/RFC5424 syslog |
+| `json` | Generic JSON logs |
+
+### SOAR Configuration
+
+Enable command execution from SOAR systems:
+
+```yaml
 server:
+  # Enable SOAR functionality (receive commands from server)
+  # Set to false to run in collector/heartbeat-only mode
+  enabled: true
   # Command server WebSocket URL
   url: "wss://localhost:8443/ws"
+  # Connection timeout
   connect_timeout: 30s
   write_timeout: 10s
   read_timeout: 60s
 
 tls:
+  # Enable mTLS (required when server.enabled is true)
   enabled: true
   cert_file: "/etc/aisac/certs/agent.crt"
   key_file: "/etc/aisac/certs/agent.key"
   ca_file: "/etc/aisac/certs/ca.crt"
-  skip_verify: false  # NOT RECOMMENDED for production
+  skip_verify: false
 
 actions:
   # Only these actions will be executed
@@ -312,9 +584,6 @@ actions:
     isolate_host:
       max_per_minute: 1
       max_per_hour: 5
-    disable_user:
-      max_per_minute: 5
-      max_per_hour: 50
 
   default_timeout: 5m
 
@@ -326,25 +595,25 @@ callback:
   timeout: 30s
   retry_attempts: 3
   retry_delay: 5s
-  skip_tls_verify: false
-
-logging:
-  level: "info"      # debug, info, warn, error
-  format: "json"     # json, text
-  output: "stdout"   # stdout, file
-  file: "/var/log/aisac/agent.log"
 ```
 
 ### Environment Variables
 
 | Variable | Description | Example |
 |----------|-------------|---------|
+| **General** | | |
 | `AISAC_AGENT_ID` | Agent unique identifier | `agent-prod-web01` |
-| `AISAC_SERVER_URL` | WebSocket server URL | `wss://server.example.com:8443/ws` |
+| `AISAC_LOG_LEVEL` | Logging level | `info` |
+| **SOAR Mode** | | |
+| `AISAC_SERVER_URL` | WebSocket server URL | `wss://server:8443/ws` |
 | `AISAC_CERT_FILE` | Agent certificate path | `/etc/aisac/certs/agent.crt` |
 | `AISAC_KEY_FILE` | Agent private key path | `/etc/aisac/certs/agent.key` |
 | `AISAC_CA_FILE` | CA certificate path | `/etc/aisac/certs/ca.crt` |
-| `AISAC_LOG_LEVEL` | Logging level | `info` |
+| **Heartbeat** | | |
+| `AISAC_HEARTBEAT_API_KEY` | Heartbeat API key | `aisac_xxxx...` |
+| `AISAC_HEARTBEAT_ASSET_ID` | Asset UUID from platform | `uuid-here` |
+| **Collector** | | |
+| `AISAC_COLLECTOR_API_KEY` | Collector API key | `aisac_xxxx...` |
 
 ---
 
@@ -615,24 +884,28 @@ aisac-agent/
 │   ├── agent/              # Agent entry point
 │   └── server/             # Command server entry point
 ├── internal/
-│   ├── agent/              # Agent core logic
-│   ├── actions/            # Action implementations
+│   ├── agent/              # Agent core logic (lifecycle, connection)
+│   ├── actions/            # SOAR action implementations
 │   ├── callback/           # SOAR callback client
+│   ├── collector/          # SIEM log collector
+│   │   ├── collector.go    # Main collector component
+│   │   ├── tailer.go       # File tailer with rotation
+│   │   ├── parser*.go      # Log parsers (JSON, syslog, Suricata)
+│   │   ├── output*.go      # Output destinations (HTTP)
+│   │   ├── batcher.go      # Event batching
+│   │   └── sincedb.go      # Position tracking
 │   ├── config/             # Configuration management
+│   ├── heartbeat/          # Platform heartbeat client
 │   └── platform/           # Platform-specific code
-│       ├── firewall_linux.go
-│       ├── firewall_windows.go
-│       ├── firewall_darwin.go
-│       ├── user_linux.go
-│       ├── user_windows.go
-│       ├── user_darwin.go
-│       ├── process_unix.go
-│       └── process_windows.go
+│       ├── firewall_*.go   # Firewall operations
+│       ├── user_*.go       # User management
+│       └── process_*.go    # Process control
 ├── pkg/
 │   ├── protocol/           # Communication protocol
 │   └── types/              # Shared types
 ├── configs/                # Example configurations
-├── scripts/                # Utility scripts
+├── scripts/
+│   ├── install.sh          # Linux installer
 │   └── gen-certs.sh        # Certificate generation
 ├── Makefile                # Build automation
 └── go.mod
@@ -846,21 +1119,26 @@ docker run -d \
 - [x] Structured logging (zerolog)
 - [x] Cross-platform build
 
-### v1.1.0 (Current) 🚧
+### v1.0.1 (Current) ✅
 - [x] mTLS authentication
 - [x] REST API with Bearer token auth
 - [x] Unblock/unisolate/enable actions
-- [ ] Linux installer (deb, rpm)
-- [ ] Windows installer (MSI)
+- [x] Heartbeat reporting to AISAC platform
+- [x] Log collector (SIEM functionality)
+- [x] Multiple operating modes (SOAR, heartbeat-only, collector)
+- [x] Linux installer script (`curl | bash`)
+- [x] `server.enabled` flag for certificate-free deployments
 
-### v1.2.0 (Planned)
+### v1.2.0 (Planned) 🚧
 - [ ] Action: `collect_forensics` (memory dump, disk artifacts)
 - [ ] Action: `threat_hunt` (IOC search)
 - [ ] Prometheus metrics endpoint
 - [ ] Agent auto-update mechanism
-- [ ] Enhanced callback system (retry, circuit breaker)
+- [ ] Windows installer (MSI)
+- [ ] Linux packages (deb, rpm)
 
 ### v1.3.0 (Future)
+- [ ] OpenSearch output for collector
 - [ ] Wazuh agent integration
 - [ ] EDR integration (CrowdStrike, SentinelOne)
 - [ ] Custom action plugins
