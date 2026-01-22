@@ -86,7 +86,7 @@ heartbeat:
   # Enable heartbeat reporting
   enabled: true
   # AISAC Platform heartbeat endpoint
-  url: "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
+  url: "https://wjozpyhcexzcxgxwdbzr.supabase.co/functions/v1/agent-heartbeat"
   # API Key for authentication (format: aisac_xxxx...)
   # Get this from the AISAC Platform when registering this asset
   api_key: "aisac_your_api_key_here"
