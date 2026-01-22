@@ -15,6 +15,9 @@ agent:
   max_reconnect_delay: 5m
 
 server:
+  # Enable SOAR functionality (receive commands from server)
+  # Set to false to run in collector/heartbeat-only mode
+  enabled: true
   # Command server WebSocket URL
   url: "wss://localhost:8443/ws"
   # Connection timeout

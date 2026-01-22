@@ -124,6 +124,9 @@ func (a *Agent) Run() error {
 	a.logger.Info().
 		Str("agent_id", a.info.ID).
 		Str("version", Version).
+		Bool("server_enabled", a.cfg.Server.Enabled).
+		Bool("collector_enabled", a.cfg.Collector.Enabled).
+		Bool("heartbeat_enabled", a.cfg.Heartbeat.Enabled).
 		Msg("Starting AISAC agent")
 
 	// Start collector if enabled (runs independently of server connection)
@@ -140,6 +143,16 @@ func (a *Agent) Run() error {
 		}
 	}
 
+	// If SOAR server is disabled, just wait for shutdown (collector/heartbeat run independently)
+	if !a.cfg.Server.Enabled {
+		a.logger.Info().Msg("SOAR server disabled, running in collector/heartbeat-only mode")
+		a.setStatus("running")
+		<-a.ctx.Done()
+		a.logger.Info().Msg("Agent shutdown requested")
+		return nil
+	}
+
+	// SOAR server connection loop
 	for {
 		select {
 		case <-a.ctx.Done():

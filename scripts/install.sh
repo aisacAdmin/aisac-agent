@@ -381,6 +381,7 @@ agent:
   max_reconnect_delay: 5m
 
 server:
+  enabled: ${SOAR_ENABLED}
   url: "${SERVER_URL}"
   connect_timeout: 30s
   write_timeout: 10s

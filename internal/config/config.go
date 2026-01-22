@@ -34,6 +34,7 @@ type AgentSettings struct {
 
 // ServerSettings contains server connection settings.
 type ServerSettings struct {
+	Enabled         bool          `yaml:"enabled"`
 	URL             string        `yaml:"url"`
 	ConnectTimeout  time.Duration `yaml:"connect_timeout"`
 	WriteTimeout    time.Duration `yaml:"write_timeout"`
@@ -90,6 +91,7 @@ func DefaultAgentConfig() *AgentConfig {
 			MaxReconnectDelay: 5 * time.Minute,
 		},
 		Server: ServerSettings{
+			Enabled:        true, // Default true for backwards compatibility
 			URL:            "wss://localhost:8443/ws",
 			ConnectTimeout: 30 * time.Second,
 			WriteTimeout:   10 * time.Second,
@@ -198,19 +200,22 @@ func (c *AgentConfig) applyEnvOverrides() {
 
 // Validate validates the configuration.
 func (c *AgentConfig) Validate() error {
-	if c.Server.URL == "" {
-		return fmt.Errorf("server URL is required")
-	}
+	// Only validate server settings when SOAR (command server) is enabled
+	if c.Server.Enabled {
+		if c.Server.URL == "" {
+			return fmt.Errorf("server URL is required when server is enabled")
+		}
 
-	if c.TLS.Enabled {
-		if c.TLS.CertFile == "" {
-			return fmt.Errorf("TLS cert_file is required when TLS is enabled")
-		}
-		if c.TLS.KeyFile == "" {
-			return fmt.Errorf("TLS key_file is required when TLS is enabled")
-		}
-		if c.TLS.CAFile == "" {
-			return fmt.Errorf("TLS ca_file is required when TLS is enabled")
+		if c.TLS.Enabled {
+			if c.TLS.CertFile == "" {
+				return fmt.Errorf("TLS cert_file is required when TLS is enabled")
+			}
+			if c.TLS.KeyFile == "" {
+				return fmt.Errorf("TLS key_file is required when TLS is enabled")
+			}
+			if c.TLS.CAFile == "" {
+				return fmt.Errorf("TLS ca_file is required when TLS is enabled")
+			}
 		}
 	}
 
@@ -222,6 +227,11 @@ func (c *AgentConfig) Validate() error {
 	// Validate heartbeat config
 	if err := c.Heartbeat.Validate(); err != nil {
 		return fmt.Errorf("heartbeat config: %w", err)
+	}
+
+	// Ensure at least one feature is enabled
+	if !c.Server.Enabled && !c.Collector.Enabled && !c.Heartbeat.Enabled {
+		return fmt.Errorf("at least one feature must be enabled: server, collector, or heartbeat")
 	}
 
 	return nil
