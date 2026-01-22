@@ -8,10 +8,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
+
+// DebugCollector enables detailed logging when set via environment variable
+var DebugCollector = os.Getenv("AISAC_DEBUG_COLLECTOR") == "true"
 
 // HTTPOutput sends events via HTTP POST to an ingest endpoint.
 type HTTPOutput struct {
@@ -41,6 +46,11 @@ func NewHTTPOutput(cfg OutputConfig) (*HTTPOutput, error) {
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
 
+	if DebugCollector {
+		log.Printf("[DEBUG] HTTPOutput: URL=%s, Timeout=%v, RetryAttempts=%d",
+			cfg.URL, cfg.Timeout, cfg.RetryAttempts)
+	}
+
 	return &HTTPOutput{
 		cfg: cfg,
 		httpClient: &http.Client{
@@ -61,10 +71,29 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 		return nil
 	}
 
+	if DebugCollector {
+		log.Printf("[DEBUG] HTTPOutput.Send: Sending %d events to %s", len(events), o.cfg.URL)
+		// Log first event as sample
+		if len(events) > 0 {
+			sample, _ := json.MarshalIndent(events[0], "", "  ")
+			log.Printf("[DEBUG] HTTPOutput.Send: Sample event:\n%s", string(sample))
+		}
+	}
+
 	// Prepare payload
 	payload, err := o.preparePayload(events)
 	if err != nil {
 		return fmt.Errorf("preparing payload: %w", err)
+	}
+
+	if DebugCollector {
+		log.Printf("[DEBUG] HTTPOutput.Send: Payload size (uncompressed): %d bytes", len(payload))
+		// Log raw payload (first 500 chars)
+		if len(payload) > 500 {
+			log.Printf("[DEBUG] HTTPOutput.Send: Payload preview:\n%s...", string(payload[:500]))
+		} else {
+			log.Printf("[DEBUG] HTTPOutput.Send: Full payload:\n%s", string(payload))
+		}
 	}
 
 	// Compress payload
@@ -73,10 +102,18 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 		return fmt.Errorf("compressing payload: %w", err)
 	}
 
+	if DebugCollector {
+		log.Printf("[DEBUG] HTTPOutput.Send: Compressed size: %d bytes (%.1f%% compression)",
+			len(compressed), float64(len(compressed))/float64(len(payload))*100)
+	}
+
 	// Send with retries
 	var lastErr error
 	for attempt := 0; attempt <= o.cfg.RetryAttempts; attempt++ {
 		if attempt > 0 {
+			if DebugCollector {
+				log.Printf("[DEBUG] HTTPOutput.Send: Retry attempt %d/%d", attempt, o.cfg.RetryAttempts)
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -87,10 +124,16 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 		err := o.doRequest(ctx, compressed)
 		if err == nil {
 			o.recordSuccess(len(events))
+			if DebugCollector {
+				log.Printf("[DEBUG] HTTPOutput.Send: SUCCESS - sent %d events", len(events))
+			}
 			return nil
 		}
 
 		lastErr = err
+		if DebugCollector {
+			log.Printf("[DEBUG] HTTPOutput.Send: Attempt %d failed: %v", attempt+1, err)
+		}
 	}
 
 	o.recordFailure()
@@ -139,7 +182,16 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 	req.Header.Set("User-Agent", "AISAC-Collector/1.0")
 
 	if o.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+o.cfg.APIKey)
+		// Use X-API-Key header as expected by AISAC platform
+		req.Header.Set("X-API-Key", o.cfg.APIKey)
+	}
+
+	if DebugCollector {
+		log.Printf("[DEBUG] HTTPOutput.doRequest: POST %s", o.cfg.URL)
+		log.Printf("[DEBUG] HTTPOutput.doRequest: Headers: Content-Type=%s, Content-Encoding=%s, Auth=%v",
+			req.Header.Get("Content-Type"),
+			req.Header.Get("Content-Encoding"),
+			o.cfg.APIKey != "")
 	}
 
 	resp, err := o.httpClient.Do(req)
@@ -150,6 +202,11 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 
 	// Read response body for error messages
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+
+	if DebugCollector {
+		log.Printf("[DEBUG] HTTPOutput.doRequest: Response status=%d, body=%s",
+			resp.StatusCode, string(body))
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
