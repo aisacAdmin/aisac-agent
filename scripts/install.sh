@@ -67,12 +67,16 @@ prompt() {
     local result
 
     if [ -n "$default" ]; then
-        echo -en "${CYAN}$message${NC} [${default}]: "
-        read result
-        echo "${result:-$default}"
+        echo -en "${CYAN}$message${NC} [$default]: " >/dev/tty
+        read result </dev/tty
+        if [ -z "$result" ]; then
+            echo "$default"
+        else
+            echo "$result"
+        fi
     else
-        echo -en "${CYAN}$message${NC}: "
-        read result
+        echo -en "${CYAN}$message${NC}: " >/dev/tty
+        read result </dev/tty
         echo "$result"
     fi
 }
@@ -81,9 +85,9 @@ prompt_password() {
     local message="$1"
     local result
 
-    echo -en "${CYAN}$message${NC}: "
-    read -s result
-    echo
+    echo -en "${CYAN}$message${NC}: " >/dev/tty
+    read -s result </dev/tty
+    echo >/dev/tty
     echo "$result"
 }
 
@@ -93,12 +97,12 @@ prompt_yes_no() {
     local result
 
     if [ "$default" = "y" ]; then
-        echo -en "${CYAN}$message${NC} [Y/n]: "
+        echo -en "${CYAN}$message${NC} [Y/n]: " >/dev/tty
     else
-        echo -en "${CYAN}$message${NC} [y/N]: "
+        echo -en "${CYAN}$message${NC} [y/N]: " >/dev/tty
     fi
 
-    read result
+    read result </dev/tty
     result=$(echo "$result" | tr '[:upper:]' '[:lower:]')
 
     if [ -z "$result" ]; then
