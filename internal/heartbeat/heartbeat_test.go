@@ -100,7 +100,7 @@ func TestHeartbeatSend(t *testing.T) {
 	var receivedAuth string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedAuth = r.Header.Get("Authorization")
+		receivedAuth = r.Header.Get("X-API-Key")
 
 		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
 			t.Errorf("Failed to decode payload: %v", err)
@@ -144,9 +144,9 @@ func TestHeartbeatSend(t *testing.T) {
 		t.Errorf("AgentVersion = %s, want 1.0.0-test", receivedPayload.AgentVersion)
 	}
 
-	// Verify Authorization header
-	if receivedAuth != "Bearer test-api-key" {
-		t.Errorf("Authorization = %s, want Bearer test-api-key", receivedAuth)
+	// Verify X-API-Key header
+	if receivedAuth != "test-api-key" {
+		t.Errorf("X-API-Key = %s, want test-api-key", receivedAuth)
 	}
 }
 

@@ -198,7 +198,7 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	req.Header.Set("X-API-Key", c.cfg.APIKey)
 	req.Header.Set("User-Agent", "AISAC-Agent/"+c.version)
 
 	resp, err := c.httpClient.Do(req)
