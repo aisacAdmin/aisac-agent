@@ -37,6 +37,8 @@ func NewParser(name string) (Parser, error) {
 		return NewSyslogParser(), nil
 	case "json":
 		return NewJSONParser(), nil
+	case "wazuh_alerts":
+		return NewWazuhAlertParser(), nil
 	default:
 		return nil, fmt.Errorf("unknown parser: %s", name)
 	}
