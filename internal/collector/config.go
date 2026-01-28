@@ -21,7 +21,7 @@ type SourceConfig struct {
 	Name   string            `yaml:"name"`
 	Type   string            `yaml:"type"`   // "json_file", "file"
 	Path   string            `yaml:"path"`
-	Parser string            `yaml:"parser"` // "suricata_eve", "syslog", "json"
+	Parser string            `yaml:"parser"` // "suricata_eve", "syslog", "json", "wazuh_alerts"
 	Tags   []string          `yaml:"tags"`   // Tags to add to events from this source
 	Fields map[string]string `yaml:"fields"` // Additional fields to add to events
 }
@@ -128,9 +128,9 @@ func (s *SourceConfig) Validate(index int) error {
 		return fmt.Errorf("collector.sources[%d].parser is required", index)
 	}
 
-	validParsers := map[string]bool{"suricata_eve": true, "syslog": true, "json": true}
+	validParsers := map[string]bool{"suricata_eve": true, "syslog": true, "json": true, "wazuh_alerts": true}
 	if !validParsers[s.Parser] {
-		return fmt.Errorf("collector.sources[%d].parser must be one of: suricata_eve, syslog, json", index)
+		return fmt.Errorf("collector.sources[%d].parser must be one of: suricata_eve, syslog, json, wazuh_alerts", index)
 	}
 
 	return nil
