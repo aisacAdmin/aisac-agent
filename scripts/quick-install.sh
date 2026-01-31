@@ -1,7 +1,13 @@
 #!/bin/bash
 #
-# AISAC Agent Quick Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/quick-install.sh | sudo bash
+# AISAC Agent Quick Installer v1.1
+#
+# Interactive mode:
+#   curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/quick-install.sh | sudo bash
+#
+# Non-interactive mode (for automation):
+#   curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/quick-install.sh | \
+#     sudo AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true bash
 #
 
 set -e
@@ -13,12 +19,16 @@ BINARY_NAME="aisac-agent"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo -e "${CYAN}"
 echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║            AISAC Agent Quick Installer                        ║"
+echo "║          AISAC Agent Quick Installer v1.1                     ║"
+echo "║                                                               ║"
+echo "║   • Auto-registration with AISAC Platform                     ║"
+echo "║   • Suricata, Wazuh, and Syslog collection                    ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -81,9 +91,27 @@ chmod +x /tmp/aisac-install.sh
 echo ""
 echo -e "${GREEN}Download complete!${NC}"
 echo ""
-echo "Run the configuration wizard:"
-echo -e "  ${CYAN}sudo /tmp/aisac-install.sh${NC}"
-echo ""
-echo "Or configure manually:"
-echo -e "  ${CYAN}nano ${CONFIG_DIR}/agent.yaml${NC}"
-echo ""
+
+# Check for non-interactive mode
+if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
+    echo -e "${YELLOW}Running in non-interactive mode...${NC}"
+    echo ""
+    # Pass environment variables to the installer
+    export AISAC_NONINTERACTIVE
+    export AISAC_API_KEY
+    export AISAC_ASSET_ID
+    export AISAC_SOAR
+    export AISAC_COLLECTOR
+    export AISAC_HEARTBEAT
+    /tmp/aisac-install.sh
+else
+    echo "Run the configuration wizard:"
+    echo -e "  ${CYAN}sudo /tmp/aisac-install.sh${NC}"
+    echo ""
+    echo "Or for automated deployment:"
+    echo -e "  ${CYAN}sudo AISAC_API_KEY=xxx AISAC_ASSET_ID=uuid AISAC_NONINTERACTIVE=true /tmp/aisac-install.sh${NC}"
+    echo ""
+    echo "Or configure manually:"
+    echo -e "  ${CYAN}nano ${CONFIG_DIR}/agent.yaml${NC}"
+    echo ""
+fi

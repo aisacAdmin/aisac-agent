@@ -30,7 +30,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Enabled:  false,
-		URL:      "https://api.aisac.cisec.es/v1/heartbeat",
+		URL:      "https://api.aisac.cisec.es/functions/v1/agent-heartbeat",
 		Interval: 120 * time.Second,
 		Timeout:  10 * time.Second,
 	}

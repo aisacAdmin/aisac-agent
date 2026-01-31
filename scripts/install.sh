@@ -25,8 +25,10 @@ BINARY_NAME="aisac-agent"
 # Default values
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/functions/v1/syslog-ingest"
-DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
+DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
+DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/functions/v1/agent-register"
 SERVICE_WAS_RUNNING=false
+REGISTRATION_SUCCESS=false
 
 #------------------------------------------------------------------------------
 # Helper functions
@@ -36,10 +38,14 @@ print_banner() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════════╗"
     echo "║                                                               ║"
-    echo "║              AISAC Agent Installer v1.0                       ║"
+    echo "║              AISAC Agent Installer v1.1                       ║"
     echo "║                                                               ║"
     echo "║   Security Information and Event Management (SIEM) Agent      ║"
     echo "║   with Security Orchestration and Response (SOAR) Actions     ║"
+    echo "║                                                               ║"
+    echo "║   • Auto-registration with AISAC Platform                     ║"
+    echo "║   • Suricata, Wazuh, and Syslog collection                    ║"
+    echo "║   • Automated incident response capabilities                  ║"
     echo "║                                                               ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -147,6 +153,115 @@ check_systemd() {
 }
 
 #------------------------------------------------------------------------------
+# Agent ID Generation and Registration
+#------------------------------------------------------------------------------
+
+generate_agent_id() {
+    local hostname=$(hostname | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+    local random_suffix=$(head -c 6 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 6)
+    echo "agent-${hostname}-${random_suffix}"
+}
+
+register_agent() {
+    local agent_id="$1"
+    local api_key="$2"
+    local asset_id="$3"
+    local register_url="${4:-$DEFAULT_REGISTER_URL}"
+
+    log_info "Registering agent with AISAC platform..."
+
+    # Collect system information
+    local hostname=$(hostname)
+    local os_info=""
+    local os_version=""
+    local arch=$(uname -m)
+    local kernel=$(uname -r)
+
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        os_info="$ID"
+        os_version="$VERSION_ID"
+    fi
+
+    # Get primary IP address
+    local ip_address=""
+    if command -v ip &> /dev/null; then
+        ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || echo "")
+    fi
+
+    # Build JSON payload
+    local payload=$(cat <<EOF
+{
+    "agent_id": "${agent_id}",
+    "asset_id": "${asset_id}",
+    "hostname": "${hostname}",
+    "os": "${os_info}",
+    "os_version": "${os_version}",
+    "arch": "${arch}",
+    "kernel": "${kernel}",
+    "ip_address": "${ip_address}",
+    "version": "1.0.1",
+    "capabilities": ["collector", "soar"]
+}
+EOF
+)
+
+    # Make registration request
+    local response=""
+    local http_code=""
+
+    if command -v curl &> /dev/null; then
+        response=$(curl -s -w "\n%{http_code}" -X POST "${register_url}" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${api_key}" \
+            -d "${payload}" 2>/dev/null)
+        http_code=$(echo "$response" | tail -n1)
+        response=$(echo "$response" | sed '$d')
+    elif command -v wget &> /dev/null; then
+        # wget doesn't easily return status codes, so we'll try a simpler approach
+        response=$(wget -q -O - --header="Content-Type: application/json" \
+            --header="Authorization: Bearer ${api_key}" \
+            --post-data="${payload}" "${register_url}" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            http_code="200"
+        else
+            http_code="500"
+        fi
+    else
+        log_warning "Neither curl nor wget found. Skipping registration."
+        return 1
+    fi
+
+    # Check response
+    case "$http_code" in
+        200|201)
+            log_success "Agent registered successfully with ID: ${agent_id}"
+            REGISTRATION_SUCCESS=true
+            return 0
+            ;;
+        401)
+            log_error "Authentication failed. Please check your API Key."
+            return 1
+            ;;
+        404)
+            log_warning "Registration endpoint not available. Agent will work in offline mode."
+            log_info "Agent ID '${agent_id}' saved locally."
+            return 0
+            ;;
+        409)
+            log_warning "Agent ID already registered. Using existing registration."
+            REGISTRATION_SUCCESS=true
+            return 0
+            ;;
+        *)
+            log_warning "Registration returned code ${http_code}. Continuing with local configuration."
+            log_info "Response: ${response}"
+            return 0
+            ;;
+    esac
+}
+
+#------------------------------------------------------------------------------
 # Installation functions
 #------------------------------------------------------------------------------
 
@@ -251,13 +366,54 @@ configure_agent() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
-    # Agent ID
-    local hostname=$(hostname)
-    AGENT_ID=$(prompt "Agent ID (unique identifier)" "$hostname")
-
-    # SOAR Configuration
+    #--------------------------------------------------------------------------
+    # Step 1: Platform Credentials (required for registration)
+    #--------------------------------------------------------------------------
+    echo -e "${YELLOW}--- Step 1: AISAC Platform Credentials ---${NC}"
     echo ""
-    echo -e "${YELLOW}--- SOAR Configuration (Command Server) ---${NC}"
+    echo -e "${BLUE}To connect this agent to AISAC, you need:${NC}"
+    echo -e "${BLUE}  1. API Key - from Platform > Assets > [Your Asset] > API Key${NC}"
+    echo -e "${BLUE}  2. Asset ID - from Platform > Assets > [Your Asset] > ID${NC}"
+    echo ""
+
+    API_KEY=$(prompt_password "API Key (format: aisac_xxxx...)")
+
+    if [ -z "$API_KEY" ]; then
+        log_warning "No API Key provided. Agent will work in offline mode."
+        API_KEY="aisac_your_api_key_here"
+    fi
+
+    ASSET_ID=$(prompt "Asset ID (UUID from platform)")
+
+    if [ -z "$ASSET_ID" ]; then
+        log_warning "No Asset ID provided. You'll need to add it later in the config file."
+        ASSET_ID="your-asset-uuid-here"
+    fi
+
+    #--------------------------------------------------------------------------
+    # Step 2: Auto-generate Agent ID and Register
+    #--------------------------------------------------------------------------
+    echo ""
+    echo -e "${YELLOW}--- Step 2: Agent Registration ---${NC}"
+    echo ""
+
+    AGENT_ID=$(generate_agent_id)
+    log_info "Generated Agent ID: ${AGENT_ID}"
+
+    # Attempt registration if we have valid credentials
+    if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
+        register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
+    else
+        log_warning "Skipping registration (missing credentials). Configure manually later."
+    fi
+
+    #--------------------------------------------------------------------------
+    # Step 3: SOAR Configuration (optional)
+    #--------------------------------------------------------------------------
+    echo ""
+    echo -e "${YELLOW}--- Step 3: SOAR Configuration (Command Server) ---${NC}"
+    echo -e "${BLUE}SOAR allows receiving automated response commands from the platform.${NC}"
+    echo ""
 
     if prompt_yes_no "Enable SOAR functionality (receive commands from server)?" "n"; then
         SOAR_ENABLED=true
@@ -272,51 +428,65 @@ configure_agent() {
         TLS_ENABLED=false
     fi
 
-    # Collector Configuration
+    #--------------------------------------------------------------------------
+    # Step 4: Log Collector Configuration
+    #--------------------------------------------------------------------------
     echo ""
-    echo -e "${YELLOW}--- Log Collector Configuration (SIEM) ---${NC}"
+    echo -e "${YELLOW}--- Step 4: Log Collector Configuration (SIEM) ---${NC}"
+    echo -e "${BLUE}Collector sends security logs to the AISAC platform for analysis.${NC}"
+    echo ""
 
-    if prompt_yes_no "Enable Log Collector (send logs to AISAC platform)?" "y"; then
+    if prompt_yes_no "Enable Log Collector?" "y"; then
         COLLECTOR_ENABLED=true
-
-        echo ""
-        echo -e "${BLUE}You need an API Key from the AISAC Platform.${NC}"
-        echo -e "${BLUE}Get it from: Platform > Assets > [Your Asset] > API Key${NC}"
-        echo ""
-
-        API_KEY=$(prompt_password "API Key (format: aisac_xxxx...)")
-
-        if [ -z "$API_KEY" ]; then
-            log_warning "No API Key provided. You'll need to add it later in the config file."
-            API_KEY="aisac_your_api_key_here"
-        fi
 
         INGEST_URL=$(prompt "Log Ingest URL" "$DEFAULT_INGEST_URL")
 
-        # Log sources
+        # Auto-detect and configure log sources
         echo ""
-        echo -e "${YELLOW}--- Log Sources ---${NC}"
+        echo -e "${YELLOW}--- Detected Log Sources ---${NC}"
 
         ENABLE_SURICATA=false
         ENABLE_SYSLOG=false
+        ENABLE_WAZUH=false
 
+        # Suricata detection
         if [ -f /var/log/suricata/eve.json ]; then
-            if prompt_yes_no "Suricata EVE logs detected. Enable collection?" "y"; then
+            log_success "Suricata EVE logs detected at /var/log/suricata/eve.json"
+            if prompt_yes_no "Enable Suricata collection?" "y"; then
                 ENABLE_SURICATA=true
+                SURICATA_PATH="/var/log/suricata/eve.json"
             fi
         else
-            if prompt_yes_no "Enable Suricata EVE log collection?" "n"; then
+            if prompt_yes_no "Enable Suricata EVE log collection (not detected)?" "n"; then
                 ENABLE_SURICATA=true
                 SURICATA_PATH=$(prompt "Suricata EVE log path" "/var/log/suricata/eve.json")
             fi
         fi
 
+        # Wazuh detection
+        if [ -f /var/ossec/logs/alerts/alerts.json ]; then
+            log_success "Wazuh alerts detected at /var/ossec/logs/alerts/alerts.json"
+            if prompt_yes_no "Enable Wazuh alerts collection?" "y"; then
+                ENABLE_WAZUH=true
+                WAZUH_PATH="/var/ossec/logs/alerts/alerts.json"
+            fi
+        else
+            if prompt_yes_no "Enable Wazuh alerts collection (not detected)?" "n"; then
+                ENABLE_WAZUH=true
+                WAZUH_PATH=$(prompt "Wazuh alerts.json path" "/var/ossec/logs/alerts/alerts.json")
+            fi
+        fi
+
+        # Syslog detection
         if [ -f /var/log/syslog ]; then
-            if prompt_yes_no "Syslog detected. Enable collection?" "y"; then
+            log_success "Syslog detected at /var/log/syslog"
+            if prompt_yes_no "Enable Syslog collection?" "y"; then
                 ENABLE_SYSLOG=true
+                SYSLOG_PATH="/var/log/syslog"
             fi
         elif [ -f /var/log/messages ]; then
-            if prompt_yes_no "System messages detected. Enable collection?" "y"; then
+            log_success "System messages detected at /var/log/messages"
+            if prompt_yes_no "Enable system messages collection?" "y"; then
                 ENABLE_SYSLOG=true
                 SYSLOG_PATH="/var/log/messages"
             fi
@@ -325,45 +495,49 @@ configure_agent() {
         COLLECTOR_ENABLED=false
     fi
 
-    # Heartbeat Configuration
+    #--------------------------------------------------------------------------
+    # Step 5: Heartbeat Configuration
+    #--------------------------------------------------------------------------
     echo ""
-    echo -e "${YELLOW}--- Heartbeat Configuration (Status Reporting) ---${NC}"
+    echo -e "${YELLOW}--- Step 5: Heartbeat Configuration ---${NC}"
+    echo -e "${BLUE}Heartbeat reports agent status and health to the platform.${NC}"
+    echo ""
 
-    if prompt_yes_no "Enable Heartbeat (report agent status to AISAC platform)?" "y"; then
+    if prompt_yes_no "Enable Heartbeat (recommended)?" "y"; then
         HEARTBEAT_ENABLED=true
-
-        echo ""
-        echo -e "${BLUE}Heartbeat reports agent status and system metrics to the platform.${NC}"
-        echo ""
-
-        # If API Key was already provided for collector, reuse it
-        if [ -z "$API_KEY" ] || [ "$API_KEY" = "aisac_your_api_key_here" ]; then
-            echo -e "${BLUE}You need an API Key from the AISAC Platform.${NC}"
-            echo -e "${BLUE}Get it from: Platform > Assets > [Your Asset] > API Key${NC}"
-            echo ""
-            API_KEY=$(prompt_password "API Key (format: aisac_xxxx...)")
-
-            if [ -z "$API_KEY" ]; then
-                log_warning "No API Key provided. You'll need to add it later in the config file."
-                API_KEY="aisac_your_api_key_here"
-            fi
-        fi
-
-        echo ""
-        echo -e "${BLUE}You need the Asset ID (UUID) from the AISAC Platform.${NC}"
-        echo -e "${BLUE}Get it from: Platform > Assets > [Your Asset] > Asset ID${NC}"
-        echo ""
-
-        ASSET_ID=$(prompt "Asset ID (UUID)")
-
-        if [ -z "$ASSET_ID" ]; then
-            log_warning "No Asset ID provided. You'll need to add it later in the config file."
-            ASSET_ID="your-asset-uuid-here"
-        fi
-
         HEARTBEAT_URL=$(prompt "Heartbeat URL" "$DEFAULT_HEARTBEAT_URL")
     else
         HEARTBEAT_ENABLED=false
+    fi
+
+    #--------------------------------------------------------------------------
+    # Summary
+    #--------------------------------------------------------------------------
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}                    Configuration Summary                       ${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${CYAN}Agent ID:${NC}       ${AGENT_ID}"
+    echo -e "  ${CYAN}Asset ID:${NC}       ${ASSET_ID}"
+    echo -e "  ${CYAN}SOAR Enabled:${NC}   ${SOAR_ENABLED}"
+    echo -e "  ${CYAN}Collector:${NC}      ${COLLECTOR_ENABLED}"
+    if [ "$COLLECTOR_ENABLED" = "true" ]; then
+        [ "$ENABLE_SURICATA" = "true" ] && echo -e "    - Suricata:   ${SURICATA_PATH:-/var/log/suricata/eve.json}"
+        [ "$ENABLE_WAZUH" = "true" ] && echo -e "    - Wazuh:      ${WAZUH_PATH:-/var/ossec/logs/alerts/alerts.json}"
+        [ "$ENABLE_SYSLOG" = "true" ] && echo -e "    - Syslog:     ${SYSLOG_PATH:-/var/log/syslog}"
+    fi
+    echo -e "  ${CYAN}Heartbeat:${NC}      ${HEARTBEAT_ENABLED}"
+    if [ "$REGISTRATION_SUCCESS" = "true" ]; then
+        echo -e "  ${GREEN}Registration:${NC}   ✓ Registered with platform"
+    else
+        echo -e "  ${YELLOW}Registration:${NC}   Offline mode"
+    fi
+    echo ""
+
+    if ! prompt_yes_no "Proceed with this configuration?" "y"; then
+        log_error "Installation cancelled by user"
+        exit 1
     fi
 }
 
@@ -452,6 +626,19 @@ EOF
       tags:
         - security
         - ids
+EOF
+        fi
+
+        if [ "$ENABLE_WAZUH" = "true" ]; then
+            cat >> "$config_file" << EOF
+    - name: wazuh
+      type: file
+      path: ${WAZUH_PATH:-/var/ossec/logs/alerts/alerts.json}
+      parser: wazuh_alerts
+      tags:
+        - security
+        - hids
+        - wazuh
 EOF
         fi
 
@@ -563,11 +750,21 @@ print_summary() {
     echo -e "${GREEN}                 Installation Complete!                         ${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
+    echo -e "  ${CYAN}Agent ID:${NC}               ${AGENT_ID}"
     echo -e "  ${CYAN}Installation Directory:${NC} $INSTALL_DIR"
     echo -e "  ${CYAN}Configuration:${NC}          $CONFIG_DIR/agent.yaml"
     echo -e "  ${CYAN}Data Directory:${NC}         $DATA_DIR"
     echo -e "  ${CYAN}Log File:${NC}               $LOG_DIR/agent.log"
     echo ""
+
+    # Registration status
+    if [ "$REGISTRATION_SUCCESS" = "true" ]; then
+        echo -e "  ${GREEN}✓ Agent registered with AISAC platform${NC}"
+    else
+        echo -e "  ${YELLOW}○ Agent running in offline mode${NC}"
+    fi
+    echo ""
+
     echo -e "  ${YELLOW}Useful Commands:${NC}"
     echo -e "    Start:   ${CYAN}systemctl start ${SERVICE_NAME}${NC}"
     echo -e "    Stop:    ${CYAN}systemctl stop ${SERVICE_NAME}${NC}"
@@ -576,23 +773,37 @@ print_summary() {
     echo -e "    Config:  ${CYAN}nano ${CONFIG_DIR}/agent.yaml${NC}"
     echo ""
 
+    # Pending configuration warnings
+    local has_warnings=false
+
     if [ "$API_KEY" = "aisac_your_api_key_here" ]; then
-        echo -e "  ${YELLOW}IMPORTANT:${NC} Don't forget to add your API Key to the config file!"
-        echo ""
+        has_warnings=true
+        echo -e "  ${YELLOW}⚠ PENDING:${NC} Add your API Key to the config file"
     fi
 
-    if [ "$HEARTBEAT_ENABLED" = "true" ] && [ "$ASSET_ID" = "your-asset-uuid-here" ]; then
-        echo -e "  ${YELLOW}IMPORTANT:${NC} Don't forget to add your Asset ID to the config file!"
-        echo ""
+    if [ "$ASSET_ID" = "your-asset-uuid-here" ]; then
+        has_warnings=true
+        echo -e "  ${YELLOW}⚠ PENDING:${NC} Add your Asset ID to the config file"
     fi
 
     if [ "$TLS_ENABLED" = "true" ]; then
-        echo -e "  ${YELLOW}IMPORTANT:${NC} For SOAR functionality, add certificates to:"
-        echo -e "    - ${CONFIG_DIR}/certs/agent.crt"
-        echo -e "    - ${CONFIG_DIR}/certs/agent.key"
-        echo -e "    - ${CONFIG_DIR}/certs/ca.crt"
+        has_warnings=true
+        echo -e "  ${YELLOW}⚠ PENDING:${NC} For SOAR, add certificates to ${CONFIG_DIR}/certs/"
+        echo -e "              (agent.crt, agent.key, ca.crt)"
+    fi
+
+    if [ "$has_warnings" = "true" ]; then
         echo ""
     fi
+
+    # Quick start guide
+    echo -e "  ${CYAN}Quick Start:${NC}"
+    echo -e "    1. Verify config:  ${CYAN}cat ${CONFIG_DIR}/agent.yaml${NC}"
+    echo -e "    2. Check status:   ${CYAN}systemctl status ${SERVICE_NAME}${NC}"
+    echo -e "    3. Watch logs:     ${CYAN}tail -f ${LOG_DIR}/agent.log${NC}"
+    echo ""
+    echo -e "  ${BLUE}Documentation: https://github.com/aisacAdmin/aisac-agent${NC}"
+    echo ""
 }
 
 #------------------------------------------------------------------------------
@@ -632,8 +843,88 @@ uninstall() {
 }
 
 #------------------------------------------------------------------------------
-# Main
+# Non-interactive mode support
 #------------------------------------------------------------------------------
+
+# Environment variables for non-interactive mode:
+# AISAC_API_KEY     - API Key from AISAC Platform
+# AISAC_ASSET_ID    - Asset ID (UUID) from AISAC Platform
+# AISAC_SOAR        - Enable SOAR (true/false, default: false)
+# AISAC_COLLECTOR   - Enable Collector (true/false, default: true)
+# AISAC_HEARTBEAT   - Enable Heartbeat (true/false, default: true)
+# AISAC_NONINTERACTIVE - Run in non-interactive mode (true/false)
+
+configure_noninteractive() {
+    log_info "Running in non-interactive mode..."
+
+    # Required: API Key and Asset ID
+    API_KEY="${AISAC_API_KEY:-aisac_your_api_key_here}"
+    ASSET_ID="${AISAC_ASSET_ID:-your-asset-uuid-here}"
+
+    # Generate Agent ID
+    AGENT_ID=$(generate_agent_id)
+    log_info "Generated Agent ID: ${AGENT_ID}"
+
+    # Attempt registration
+    if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
+        register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
+    else
+        log_warning "Missing credentials. Set AISAC_API_KEY and AISAC_ASSET_ID environment variables."
+    fi
+
+    # Features (with defaults)
+    SOAR_ENABLED="${AISAC_SOAR:-false}"
+    COLLECTOR_ENABLED="${AISAC_COLLECTOR:-true}"
+    HEARTBEAT_ENABLED="${AISAC_HEARTBEAT:-true}"
+
+    SERVER_URL="$DEFAULT_SERVER_URL"
+    TLS_ENABLED=false
+    if [ "$SOAR_ENABLED" = "true" ]; then
+        TLS_ENABLED=true
+    fi
+
+    INGEST_URL="$DEFAULT_INGEST_URL"
+    HEARTBEAT_URL="$DEFAULT_HEARTBEAT_URL"
+
+    # Auto-detect log sources
+    ENABLE_SURICATA=false
+    ENABLE_WAZUH=false
+    ENABLE_SYSLOG=false
+
+    if [ -f /var/log/suricata/eve.json ]; then
+        ENABLE_SURICATA=true
+        SURICATA_PATH="/var/log/suricata/eve.json"
+        log_success "Auto-detected: Suricata EVE logs"
+    fi
+
+    if [ -f /var/ossec/logs/alerts/alerts.json ]; then
+        ENABLE_WAZUH=true
+        WAZUH_PATH="/var/ossec/logs/alerts/alerts.json"
+        log_success "Auto-detected: Wazuh alerts"
+    fi
+
+    if [ -f /var/log/syslog ]; then
+        ENABLE_SYSLOG=true
+        SYSLOG_PATH="/var/log/syslog"
+        log_success "Auto-detected: Syslog"
+    elif [ -f /var/log/messages ]; then
+        ENABLE_SYSLOG=true
+        SYSLOG_PATH="/var/log/messages"
+        log_success "Auto-detected: System messages"
+    fi
+
+    # Summary
+    echo ""
+    echo -e "${CYAN}Configuration Summary:${NC}"
+    echo -e "  Agent ID:    ${AGENT_ID}"
+    echo -e "  SOAR:        ${SOAR_ENABLED}"
+    echo -e "  Collector:   ${COLLECTOR_ENABLED}"
+    echo -e "  Heartbeat:   ${HEARTBEAT_ENABLED}"
+    echo -e "  Suricata:    ${ENABLE_SURICATA}"
+    echo -e "  Wazuh:       ${ENABLE_WAZUH}"
+    echo -e "  Syslog:      ${ENABLE_SYSLOG}"
+    echo ""
+}
 
 main() {
     print_banner
@@ -652,6 +943,21 @@ main() {
             echo "  --uninstall, -u    Uninstall AISAC Agent"
             echo "  --help, -h         Show this help message"
             echo ""
+            echo "Non-interactive mode (for automation):"
+            echo "  Set AISAC_NONINTERACTIVE=true and configure with environment variables:"
+            echo ""
+            echo "  Required:"
+            echo "    AISAC_API_KEY      API Key from AISAC Platform"
+            echo "    AISAC_ASSET_ID     Asset ID (UUID) from AISAC Platform"
+            echo ""
+            echo "  Optional:"
+            echo "    AISAC_SOAR         Enable SOAR (true/false, default: false)"
+            echo "    AISAC_COLLECTOR    Enable Collector (true/false, default: true)"
+            echo "    AISAC_HEARTBEAT    Enable Heartbeat (true/false, default: true)"
+            echo ""
+            echo "Example:"
+            echo "  AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true ./install.sh"
+            echo ""
             exit 0
             ;;
     esac
@@ -666,10 +972,31 @@ main() {
     # Installation
     create_directories
     install_binary
-    configure_agent
+
+    # Configuration - interactive or non-interactive
+    if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
+        configure_noninteractive
+    else
+        configure_agent
+    fi
+
     generate_config
     install_systemd_service
-    start_service
+
+    # Start service
+    if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
+        log_info "Starting AISAC Agent..."
+        systemctl start ${SERVICE_NAME}
+        sleep 2
+        if systemctl is-active --quiet ${SERVICE_NAME}; then
+            log_success "AISAC Agent is running"
+        else
+            log_error "Failed to start AISAC Agent"
+        fi
+    else
+        start_service
+    fi
+
     print_summary
 }
 

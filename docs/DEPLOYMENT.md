@@ -107,6 +107,104 @@ tls:
 
 ---
 
+## AISAC Platform Integration Architecture
+
+The AISAC Agent communicates with the AISAC Platform through a reverse proxy for security.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         AISAC Agent                                     │
+│                                                                         │
+│  ┌─────────────┐   ┌─────────────┐   ┌────────────────────┐            │
+│  │  Heartbeat  │   │  Collector  │   │  SOAR (optional)   │            │
+│  │   Module    │   │   Module    │   │   via WebSocket    │            │
+│  └──────┬──────┘   └──────┬──────┘   └─────────┬──────────┘            │
+└─────────┼─────────────────┼───────────────────┼────────────────────────┘
+          │                 │                   │
+          │ HTTPS           │ HTTPS             │ WSS
+          ▼                 ▼                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    api.aisac.cisec.es (Caddy Proxy)                     │
+│                                                                         │
+│  /functions/v1/agent-heartbeat   →  Supabase Edge Function              │
+│  /functions/v1/syslog-ingest     →  Supabase Edge Function              │
+│  /functions/v1/agent-register    →  Supabase Edge Function              │
+└─────────────────────────────────────────────────────────────────────────┘
+          │                 │                   │
+          ▼                 ▼                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Supabase Backend                                   │
+│                                                                         │
+│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐       │
+│  │ agent-heartbeat │   │  syslog-ingest  │   │ agent-register  │       │
+│  │ Edge Function   │   │ Edge Function   │   │ Edge Function   │       │
+│  └────────┬────────┘   └────────┬────────┘   └────────┬────────┘       │
+│           │                     │                     │                 │
+│           ▼                     ▼                     ▼                 │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    PostgreSQL Database                          │   │
+│  │  - monitored_assets (status, last_heartbeat)                    │   │
+│  │  - log_events (normalized security events)                      │   │
+│  │  - agent_registrations (agent tracking)                         │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Communication Flow
+
+1. **Agent Registration** (on first install):
+   - Installer generates unique Agent ID: `agent-{hostname}-{random6}`
+   - Agent calls `POST /functions/v1/agent-register` with API Key
+   - Platform validates API Key and links agent to monitored asset
+
+2. **Heartbeat** (periodic, default 120s):
+   - Agent collects system metrics (CPU, memory, disk)
+   - Sends `POST /functions/v1/agent-heartbeat` with `X-API-Key` header
+   - Platform updates asset status to "online" and stores metrics
+   - Response can override heartbeat interval
+
+3. **Log Collection** (continuous):
+   - Collector reads log files (Suricata, Wazuh, syslog)
+   - Batches events (default: 100 events or 5s interval)
+   - Sends `POST /functions/v1/syslog-ingest` as NDJSON + gzip
+   - Platform normalizes and stores events for SIEM analysis
+
+4. **SOAR Commands** (on-demand, optional):
+   - Requires mTLS certificates and Command Server
+   - Commands sent via WebSocket from n8n workflows
+   - Agent executes actions and reports results via callback
+
+### Authentication
+
+| Endpoint | Auth Method | Header |
+|----------|-------------|--------|
+| agent-heartbeat | API Key | `X-API-Key: aisac_xxxx` |
+| syslog-ingest | API Key | `Authorization: Bearer aisac_xxxx` |
+| agent-register | API Key | `Authorization: Bearer aisac_xxxx` |
+| Command Server | mTLS | Client certificate |
+
+### Non-Interactive Installation
+
+For automated deployments (CI/CD, Ansible, etc.):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/quick-install.sh | \
+  sudo AISAC_API_KEY=aisac_xxx \
+       AISAC_ASSET_ID=uuid-here \
+       AISAC_NONINTERACTIVE=true \
+       bash
+```
+
+Environment variables:
+- `AISAC_API_KEY` (required): Platform API key
+- `AISAC_ASSET_ID` (required): UUID of the monitored asset
+- `AISAC_NONINTERACTIVE=true`: Skip interactive prompts
+- `AISAC_SOAR=true/false`: Enable/disable SOAR mode
+- `AISAC_COLLECTOR=true/false`: Enable/disable log collection
+- `AISAC_HEARTBEAT=true/false`: Enable/disable heartbeat
+
+---
+
 ## 2. Prerequisites
 
 ### Required Software
@@ -1027,7 +1125,7 @@ server:
 # Enable heartbeat
 heartbeat:
   enabled: true
-  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  url: "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
   api_key: "aisac_your_api_key_here"
   asset_id: "your-asset-uuid-here"
   interval: 120s
@@ -1111,7 +1209,7 @@ server:
 # Optional: Enable heartbeat with collector
 heartbeat:
   enabled: true
-  url: "https://api.aisac.cisec.es/v1/heartbeat"
+  url: "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
   api_key: "aisac_your_api_key_here"
   asset_id: "your-asset-uuid-here"
   interval: 120s
