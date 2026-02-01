@@ -64,7 +64,7 @@ server:
 heartbeat:
   enabled: true
   interval: 60s
-  url: "https://api.aisac.cisec.es/functions/v1/heartbeat"
+  url: "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
   api_key: "\${AISAC_API_KEY}"
 
 collector:

@@ -166,7 +166,7 @@ The AISAC Agent communicates with the AISAC Platform through a reverse proxy for
 3. **Log Collection** (continuous):
    - Collector reads log files (Suricata, Wazuh, syslog)
    - Batches events (default: 100 events or 5s interval)
-   - Sends `POST /functions/v1/syslog-ingest` as NDJSON + gzip
+   - Sends `POST /functions/v1/syslog-ingest` as JSON + gzip
    - Platform normalizes and stores events for SIEM analysis
 
 4. **SOAR Commands** (on-demand, optional):

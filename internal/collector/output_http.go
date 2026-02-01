@@ -140,19 +140,19 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 	return fmt.Errorf("failed after %d attempts: %w", o.cfg.RetryAttempts+1, lastErr)
 }
 
+// IngestPayload is the JSON structure expected by the syslog-ingest Edge Function.
+type IngestPayload struct {
+	Events []*LogEvent `json:"events"`
+}
+
 // preparePayload creates the JSON payload for the events.
 func (o *HTTPOutput) preparePayload(events []*LogEvent) ([]byte, error) {
-	// Create NDJSON (newline-delimited JSON) payload
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-
-	for _, event := range events {
-		if err := encoder.Encode(event); err != nil {
-			return nil, fmt.Errorf("encoding event: %w", err)
-		}
+	// Create JSON payload with "events" array (format expected by AISAC platform)
+	payload := IngestPayload{
+		Events: events,
 	}
 
-	return buf.Bytes(), nil
+	return json.Marshal(payload)
 }
 
 // compress compresses the payload using gzip.
@@ -177,7 +177,7 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 		return fmt.Errorf("creating request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/x-ndjson")
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("User-Agent", "AISAC-Collector/1.0")
 
