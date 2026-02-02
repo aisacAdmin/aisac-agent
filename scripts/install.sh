@@ -263,6 +263,127 @@ EOF
 }
 
 #------------------------------------------------------------------------------
+# Certificate Generation for mTLS (SOAR mode)
+#------------------------------------------------------------------------------
+
+generate_certificates() {
+    local cert_dir="$1"
+    local server_hostname="$2"
+
+    log_info "Generating mTLS certificates for SOAR mode..."
+
+    # Check if openssl is available
+    if ! command -v openssl &> /dev/null; then
+        log_error "OpenSSL is required to generate certificates but not found"
+        return 1
+    fi
+
+    local days=365
+    local ca_subject="/C=ES/ST=Madrid/L=Madrid/O=AISAC/OU=Security/CN=AISAC CA"
+    local agent_subject="/C=ES/ST=Madrid/L=Madrid/O=AISAC/OU=Security/CN=${AGENT_ID:-aisac-agent}"
+
+    mkdir -p "$cert_dir"
+
+    # Check if certificates already exist
+    if [ -f "$cert_dir/agent.crt" ] && [ -f "$cert_dir/agent.key" ] && [ -f "$cert_dir/ca.crt" ]; then
+        log_warning "Certificates already exist in $cert_dir"
+        if prompt_yes_no "Regenerate certificates? (will overwrite existing)" "n"; then
+            log_info "Regenerating certificates..."
+        else
+            log_info "Using existing certificates"
+            return 0
+        fi
+    fi
+
+    # Generate CA private key
+    log_info "Generating CA private key..."
+    openssl genrsa -out "$cert_dir/ca.key" 4096 2>/dev/null
+
+    # Generate CA certificate
+    log_info "Generating CA certificate..."
+    openssl req -new -x509 -days $days -key "$cert_dir/ca.key" \
+        -out "$cert_dir/ca.crt" -subj "$ca_subject" 2>/dev/null
+
+    # Generate agent private key
+    log_info "Generating agent private key..."
+    openssl genrsa -out "$cert_dir/agent.key" 2048 2>/dev/null
+
+    # Generate agent CSR
+    openssl req -new -key "$cert_dir/agent.key" \
+        -out "$cert_dir/agent.csr" -subj "$agent_subject" 2>/dev/null
+
+    # Create agent certificate extensions
+    cat > "$cert_dir/agent.ext" << EXTEOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+EXTEOF
+
+    # Generate agent certificate
+    log_info "Generating agent certificate..."
+    openssl x509 -req -in "$cert_dir/agent.csr" \
+        -CA "$cert_dir/ca.crt" -CAkey "$cert_dir/ca.key" -CAcreateserial \
+        -out "$cert_dir/agent.crt" -days $days \
+        -extfile "$cert_dir/agent.ext" 2>/dev/null
+
+    # Generate server certificates if hostname provided
+    if [ -n "$server_hostname" ]; then
+        local server_subject="/C=ES/ST=Madrid/L=Madrid/O=AISAC/OU=Security/CN=${server_hostname}"
+
+        log_info "Generating server private key..."
+        openssl genrsa -out "$cert_dir/server.key" 2048 2>/dev/null
+
+        openssl req -new -key "$cert_dir/server.key" \
+            -out "$cert_dir/server.csr" -subj "$server_subject" 2>/dev/null
+
+        # Server extensions with SANs
+        cat > "$cert_dir/server.ext" << EXTEOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = ${server_hostname}
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EXTEOF
+
+        openssl x509 -req -in "$cert_dir/server.csr" \
+            -CA "$cert_dir/ca.crt" -CAkey "$cert_dir/ca.key" -CAcreateserial \
+            -out "$cert_dir/server.crt" -days $days \
+            -extfile "$cert_dir/server.ext" 2>/dev/null
+
+        rm -f "$cert_dir/server.csr" "$cert_dir/server.ext"
+    fi
+
+    # Clean up temporary files
+    rm -f "$cert_dir/agent.csr" "$cert_dir/agent.ext" "$cert_dir"/*.srl
+
+    # Set permissions
+    chmod 600 "$cert_dir"/*.key
+    chmod 644 "$cert_dir"/*.crt
+
+    log_success "Certificates generated in $cert_dir"
+    echo ""
+    echo -e "  ${CYAN}Generated files:${NC}"
+    echo -e "    - ca.crt      (CA certificate - share with server)"
+    echo -e "    - ca.key      (CA private key - keep secure!)"
+    echo -e "    - agent.crt   (Agent certificate)"
+    echo -e "    - agent.key   (Agent private key)"
+    if [ -f "$cert_dir/server.crt" ]; then
+        echo -e "    - server.crt  (Server certificate)"
+        echo -e "    - server.key  (Server private key)"
+    fi
+    echo ""
+
+    return 0
+}
+
+#------------------------------------------------------------------------------
 # Installation functions
 #------------------------------------------------------------------------------
 
@@ -432,6 +553,7 @@ configure_agent() {
     echo ""
     echo -e "${YELLOW}--- Step 3: SOAR Configuration (Command Server) ---${NC}"
     echo -e "${BLUE}SOAR allows receiving automated response commands from the platform.${NC}"
+    echo -e "${BLUE}This requires mTLS certificates for secure communication.${NC}"
     echo ""
 
     if prompt_yes_no "Enable SOAR functionality (receive commands from server)?" "n"; then
@@ -439,12 +561,45 @@ configure_agent() {
         SERVER_URL=$(prompt "Command Server WebSocket URL" "$DEFAULT_SERVER_URL")
 
         echo ""
-        log_info "For mTLS, you'll need certificate files in $CONFIG_DIR/certs/"
+        echo -e "${BLUE}mTLS certificates are required for SOAR mode.${NC}"
+
+        if [ -f "$CONFIG_DIR/certs/agent.crt" ] && [ -f "$CONFIG_DIR/certs/ca.crt" ]; then
+            log_success "Existing certificates found in $CONFIG_DIR/certs/"
+            if prompt_yes_no "Use existing certificates?" "y"; then
+                TLS_ENABLED=true
+                GENERATE_CERTS=false
+            else
+                GENERATE_CERTS=true
+            fi
+        else
+            if prompt_yes_no "Generate mTLS certificates automatically?" "y"; then
+                GENERATE_CERTS=true
+            else
+                log_warning "You'll need to manually copy certificates to $CONFIG_DIR/certs/"
+                log_info "Required files: ca.crt, agent.crt, agent.key"
+                GENERATE_CERTS=false
+            fi
+        fi
+
+        # Extract server hostname from URL for certificate generation
+        SERVER_HOSTNAME=""
+        if [ "$GENERATE_CERTS" = "true" ]; then
+            # Extract hostname from wss://hostname:port/path
+            SERVER_HOSTNAME=$(echo "$SERVER_URL" | sed -E 's#wss?://([^:/]+).*#\1#')
+            if prompt_yes_no "Also generate server certificates for '$SERVER_HOSTNAME'?" "y"; then
+                GENERATE_SERVER_CERTS=true
+            else
+                GENERATE_SERVER_CERTS=false
+                SERVER_HOSTNAME=""
+            fi
+        fi
+
         TLS_ENABLED=true
     else
         SOAR_ENABLED=false
         SERVER_URL="$DEFAULT_SERVER_URL"
         TLS_ENABLED=false
+        GENERATE_CERTS=false
     fi
 
     #--------------------------------------------------------------------------
@@ -998,6 +1153,17 @@ main() {
         configure_noninteractive
     else
         configure_agent
+    fi
+
+    # Generate certificates if SOAR mode is enabled and requested
+    if [ "${GENERATE_CERTS:-false}" = "true" ]; then
+        echo ""
+        log_info "Generating mTLS certificates..."
+        if [ "${GENERATE_SERVER_CERTS:-false}" = "true" ]; then
+            generate_certificates "$CONFIG_DIR/certs" "$SERVER_HOSTNAME"
+        else
+            generate_certificates "$CONFIG_DIR/certs" ""
+        fi
     fi
 
     generate_config
