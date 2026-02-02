@@ -142,16 +142,25 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 
 // IngestPayload is the JSON structure expected by the AISAC /v1/logs endpoint.
 type IngestPayload struct {
-	AssetID string      `json:"asset_id"`
-	Logs    []*LogEvent `json:"logs"`
+	AssetID  string   `json:"asset_id"`
+	Messages []string `json:"messages"`
 }
 
 // preparePayload creates the JSON payload for the events.
 func (o *HTTPOutput) preparePayload(events []*LogEvent) ([]byte, error) {
-	// Create JSON payload with asset_id and logs array (format expected by AISAC platform)
+	// Convert each LogEvent to a JSON string (API expects array of strings)
+	messages := make([]string, 0, len(events))
+	for _, event := range events {
+		eventJSON, err := json.Marshal(event)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling event: %w", err)
+		}
+		messages = append(messages, string(eventJSON))
+	}
+
 	payload := IngestPayload{
-		AssetID: o.cfg.AssetID,
-		Logs:    events,
+		AssetID:  o.cfg.AssetID,
+		Messages: messages,
 	}
 
 	return json.Marshal(payload)
