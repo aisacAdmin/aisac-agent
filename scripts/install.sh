@@ -376,7 +376,7 @@ configure_agent() {
     echo -e "${BLUE}  2. Asset ID - from Platform > Assets > [Your Asset] > ID${NC}"
     echo ""
 
-    API_KEY=$(prompt_password "API Key (format: aisac_xxxx...)")
+    API_KEY=$(prompt "API Key (format: aisac_xxxx...)")
 
     if [ -z "$API_KEY" ]; then
         log_warning "No API Key provided. Agent will work in offline mode."
