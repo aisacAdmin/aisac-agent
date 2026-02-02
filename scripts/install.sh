@@ -659,6 +659,7 @@ EOF
     type: http
     url: "${INGEST_URL}"
     api_key: "${API_KEY}"
+    asset_id: "${ASSET_ID}"
     timeout: 30s
     retry_attempts: 3
     retry_delay: 5s
