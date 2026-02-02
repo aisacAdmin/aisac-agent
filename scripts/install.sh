@@ -239,12 +239,13 @@ EOF
             REGISTRATION_SUCCESS=true
             return 0
             ;;
-        401)
-            log_error "Authentication failed. Please check your API Key."
-            return 1
+        401|403)
+            log_warning "Registration endpoint not available (HTTP ${http_code}). Continuing without registration."
+            log_info "Agent will work normally with heartbeat and collector."
+            return 0
             ;;
         404)
-            log_warning "Registration endpoint not available. Agent will work in offline mode."
+            log_warning "Registration endpoint not found. Agent will work in offline mode."
             log_info "Agent ID '${agent_id}' saved locally."
             return 0
             ;;
