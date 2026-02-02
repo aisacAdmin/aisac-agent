@@ -384,6 +384,113 @@ EXTEOF
 }
 
 #------------------------------------------------------------------------------
+# Command Server Installation (SOAR)
+#------------------------------------------------------------------------------
+
+generate_api_token() {
+    local password="$1"
+
+    if [ -n "$password" ]; then
+        # Generate token from password using SHA256
+        echo -n "$password" | sha256sum | cut -d' ' -f1
+    else
+        # Generate random 32-byte token
+        head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 44
+    fi
+}
+
+install_command_server() {
+    local api_token="$1"
+
+    log_info "Installing AISAC Command Server..."
+
+    # Compile server binary if source available
+    if [ -f "./go.mod" ] && [ -d "./cmd/server" ]; then
+        if command -v go &> /dev/null; then
+            log_info "Compiling command server from source..."
+            if go build -o "$INSTALL_DIR/aisac-server" ./cmd/server/; then
+                log_success "Command server compiled successfully"
+            else
+                log_error "Failed to compile command server"
+                return 1
+            fi
+        else
+            log_error "Go is required to compile the command server"
+            return 1
+        fi
+    else
+        log_error "Source code not found. Cannot compile command server."
+        return 1
+    fi
+
+    chmod 755 "$INSTALL_DIR/aisac-server"
+
+    # Create systemd service for command server
+    log_info "Creating command server systemd service..."
+
+    cat > /etc/systemd/system/aisac-server.service << EOF
+[Unit]
+Description=AISAC Command Server (SOAR)
+Documentation=https://github.com/aisacAdmin/aisac-agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=$INSTALL_DIR/aisac-server \\
+    --listen :8443 \\
+    --cert $CONFIG_DIR/certs/server.crt \\
+    --key $CONFIG_DIR/certs/server.key \\
+    --ca $CONFIG_DIR/certs/ca.crt \\
+    --api-token "${api_token}" \\
+    --api-mtls=false \\
+    --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aisac-server
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$DATA_DIR $LOG_DIR
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable aisac-server
+
+    log_success "Command server service installed"
+
+    # Save API token to a secure file for reference
+    echo "$api_token" > "$CONFIG_DIR/server-api-token"
+    chmod 600 "$CONFIG_DIR/server-api-token"
+    log_info "API token saved to $CONFIG_DIR/server-api-token"
+
+    return 0
+}
+
+start_command_server() {
+    log_info "Starting command server..."
+    systemctl start aisac-server
+    sleep 2
+
+    if systemctl is-active --quiet aisac-server; then
+        log_success "Command server is running"
+        return 0
+    else
+        log_error "Failed to start command server"
+        echo "Check logs with: journalctl -u aisac-server -n 50"
+        return 1
+    fi
+}
+
+#------------------------------------------------------------------------------
 # Installation functions
 #------------------------------------------------------------------------------
 
@@ -553,15 +660,43 @@ configure_agent() {
     echo ""
     echo -e "${YELLOW}--- Step 3: SOAR Configuration (Command Server) ---${NC}"
     echo -e "${BLUE}SOAR allows receiving automated response commands from the platform.${NC}"
-    echo -e "${BLUE}This requires mTLS certificates for secure communication.${NC}"
+    echo -e "${BLUE}This enables n8n to send security actions to this agent.${NC}"
     echo ""
+
+    INSTALL_COMMAND_SERVER=false
+    SERVER_API_TOKEN=""
 
     if prompt_yes_no "Enable SOAR functionality (receive commands from server)?" "n"; then
         SOAR_ENABLED=true
-        SERVER_URL=$(prompt "Command Server WebSocket URL" "$DEFAULT_SERVER_URL")
 
         echo ""
-        echo -e "${BLUE}mTLS certificates are required for SOAR mode.${NC}"
+        echo -e "${BLUE}The Command Server receives commands from n8n and forwards them to agents.${NC}"
+        echo -e "${BLUE}It can run on this machine or on a separate server.${NC}"
+        echo ""
+
+        if prompt_yes_no "Install Command Server on this machine?" "y"; then
+            INSTALL_COMMAND_SERVER=true
+            SERVER_URL="wss://localhost:8443/ws"
+
+            echo ""
+            echo -e "${BLUE}API Token protects the Command Server REST API (used by n8n).${NC}"
+            echo -e "${BLUE}You can enter a password to derive the token, or leave empty for random.${NC}"
+            echo ""
+
+            local token_password=$(prompt "Password for API token (leave empty for random)")
+            SERVER_API_TOKEN=$(generate_api_token "$token_password")
+
+            log_info "Generated API Token: ${SERVER_API_TOKEN:0:16}..."
+            echo ""
+            echo -e "${YELLOW}IMPORTANT: Save this token for n8n configuration:${NC}"
+            echo -e "${CYAN}${SERVER_API_TOKEN}${NC}"
+            echo ""
+        else
+            SERVER_URL=$(prompt "Command Server WebSocket URL" "$DEFAULT_SERVER_URL")
+        fi
+
+        echo ""
+        echo -e "${BLUE}mTLS certificates are required for secure communication.${NC}"
 
         if [ -f "$CONFIG_DIR/certs/agent.crt" ] && [ -f "$CONFIG_DIR/certs/ca.crt" ]; then
             log_success "Existing certificates found in $CONFIG_DIR/certs/"
@@ -938,9 +1073,31 @@ print_summary() {
     else
         echo -e "  ${YELLOW}○ Agent running in offline mode${NC}"
     fi
+
+    # Command server status
+    if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
+        echo ""
+        echo -e "  ${GREEN}═══════════════════════════════════════════════════════════${NC}"
+        echo -e "  ${GREEN}                 Command Server (SOAR)                       ${NC}"
+        echo -e "  ${GREEN}═══════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo -e "  ${CYAN}Service:${NC}     aisac-server"
+        echo -e "  ${CYAN}Listen:${NC}      :8443 (WebSocket + REST API)"
+        echo -e "  ${CYAN}API Token:${NC}   ${CONFIG_DIR}/server-api-token"
+        echo ""
+        echo -e "  ${YELLOW}n8n Configuration:${NC}"
+        echo -e "    REST API URL:  ${CYAN}https://localhost:8443/api/v1${NC}"
+        echo -e "    API Token:     ${CYAN}${SERVER_API_TOKEN}${NC}"
+        echo ""
+        echo -e "  ${YELLOW}Server Commands:${NC}"
+        echo -e "    Start:   ${CYAN}systemctl start aisac-server${NC}"
+        echo -e "    Stop:    ${CYAN}systemctl stop aisac-server${NC}"
+        echo -e "    Status:  ${CYAN}systemctl status aisac-server${NC}"
+        echo -e "    Logs:    ${CYAN}journalctl -u aisac-server -f${NC}"
+    fi
     echo ""
 
-    echo -e "  ${YELLOW}Useful Commands:${NC}"
+    echo -e "  ${YELLOW}Agent Commands:${NC}"
     echo -e "    Start:   ${CYAN}systemctl start ${SERVICE_NAME}${NC}"
     echo -e "    Stop:    ${CYAN}systemctl stop ${SERVICE_NAME}${NC}"
     echo -e "    Status:  ${CYAN}systemctl status ${SERVICE_NAME}${NC}"
@@ -961,7 +1118,7 @@ print_summary() {
         echo -e "  ${YELLOW}⚠ PENDING:${NC} Add your Asset ID to the config file"
     fi
 
-    if [ "$TLS_ENABLED" = "true" ]; then
+    if [ "$TLS_ENABLED" = "true" ] && [ "${GENERATE_CERTS:-false}" = "false" ]; then
         has_warnings=true
         echo -e "  ${YELLOW}⚠ PENDING:${NC} For SOAR, add certificates to ${CONFIG_DIR}/certs/"
         echo -e "              (agent.crt, agent.key, ca.crt)"
@@ -1166,11 +1323,21 @@ main() {
         fi
     fi
 
+    # Install Command Server if requested
+    if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
+        echo ""
+        install_command_server "$SERVER_API_TOKEN"
+    fi
+
     generate_config
     install_systemd_service
 
-    # Start service
+    # Start services
     if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
+        # Start command server first if installed
+        if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
+            start_command_server
+        fi
         log_info "Starting AISAC Agent..."
         systemctl start ${SERVICE_NAME}
         sleep 2
@@ -1180,6 +1347,12 @@ main() {
             log_error "Failed to start AISAC Agent"
         fi
     else
+        # Start command server first if installed
+        if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
+            if prompt_yes_no "Start Command Server now?" "y"; then
+                start_command_server
+            fi
+        fi
         start_service
     fi
 
