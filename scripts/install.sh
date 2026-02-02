@@ -26,7 +26,7 @@ BINARY_NAME="aisac-agent"
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/v1/logs"
 DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
-DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/functions/v1/agent-register"
+DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/v1/register"
 SERVICE_WAS_RUNNING=false
 REGISTRATION_SUCCESS=false
 
@@ -213,14 +213,14 @@ EOF
     if command -v curl &> /dev/null; then
         response=$(curl -s -w "\n%{http_code}" -X POST "${register_url}" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${api_key}" \
+            -H "X-API-Key: ${api_key}" \
             -d "${payload}" 2>/dev/null)
         http_code=$(echo "$response" | tail -n1)
         response=$(echo "$response" | sed '$d')
     elif command -v wget &> /dev/null; then
         # wget doesn't easily return status codes, so we'll try a simpler approach
         response=$(wget -q -O - --header="Content-Type: application/json" \
-            --header="Authorization: Bearer ${api_key}" \
+            --header="X-API-Key: ${api_key}" \
             --post-data="${payload}" "${register_url}" 2>/dev/null)
         if [ $? -eq 0 ]; then
             http_code="200"
@@ -293,7 +293,25 @@ install_binary() {
         SERVICE_WAS_RUNNING=true
     fi
 
-    # Check if binary exists locally first
+    # Option 1: Compile from source if we're in the project directory with Go
+    if [ -f "./go.mod" ] && [ -d "./cmd/agent" ]; then
+        if command -v go &> /dev/null; then
+            log_info "Source code detected, compiling from source..."
+            if go build -o "$INSTALL_DIR/$BINARY_NAME" ./cmd/agent/; then
+                log_success "Binary compiled successfully"
+                chmod 755 "$INSTALL_DIR/$BINARY_NAME"
+                ln -sf "$INSTALL_DIR/$BINARY_NAME" /usr/local/bin/$BINARY_NAME
+                log_success "Binary installed to $INSTALL_DIR/$BINARY_NAME"
+                return 0
+            else
+                log_warning "Compilation failed, trying other methods..."
+            fi
+        else
+            log_warning "Go not installed, cannot compile from source"
+        fi
+    fi
+
+    # Option 2: Check if prebuilt binary exists locally
     local binary_path=""
 
     if [ -f "./bin/${BINARY_NAME}" ]; then
@@ -305,7 +323,7 @@ install_binary() {
     fi
 
     if [ -n "$binary_path" ]; then
-        log_info "Using local binary: $binary_path"
+        log_info "Using prebuilt binary: $binary_path"
         cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
     else
         # Download from GitHub Releases
