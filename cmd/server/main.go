@@ -61,6 +61,7 @@ type AgentConn struct {
 	LastSeen    time.Time
 	msgCount    int64     // Message count for rate limiting
 	msgResetAt  time.Time // When to reset message count
+	stopPing    chan struct{} // Signal to stop ping loop
 }
 
 func main() {
@@ -280,6 +281,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Info:     req.AgentInfo,
 		Conn:     conn,
 		LastSeen: time.Now(),
+		stopPing: make(chan struct{}),
 	}
 
 	s.agentsMu.Lock()
@@ -292,8 +294,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Str("platform", string(agent.Info.Platform)).
 		Msg("Agent registered")
 
+	// Start ping loop to keep connection alive
+	go s.startPingLoop(agent)
+
 	// Handle messages (blocks until disconnect)
 	s.handleAgentMessages(agent)
+
+	// Stop ping loop
+	close(agent.stopPing)
 
 	// Cleanup on disconnect
 	s.agentsMu.Lock()
@@ -308,6 +316,38 @@ const (
 	maxMessagesPerMinute = 120 // Maximum messages per minute per agent
 	rateLimitWindow      = time.Minute
 )
+
+// Ping interval for keeping WebSocket connections alive
+const pingInterval = 30 * time.Second
+
+// startPingLoop sends periodic ping messages to keep the connection alive.
+func (s *Server) startPingLoop(agent *AgentConn) {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-agent.stopPing:
+			return
+		case <-ticker.C:
+			pingMsg, err := protocol.NewMessage(protocol.MessageTypePing, nil)
+			if err != nil {
+				s.logger.Error().Err(err).Str("agent_id", agent.ID).Msg("Failed to create ping message")
+				continue
+			}
+
+			agent.ConnMu.Lock()
+			err = agent.Conn.WriteJSON(pingMsg)
+			agent.ConnMu.Unlock()
+
+			if err != nil {
+				s.logger.Debug().Err(err).Str("agent_id", agent.ID).Msg("Failed to send ping")
+				return
+			}
+			s.logger.Debug().Str("agent_id", agent.ID).Msg("Ping sent")
+		}
+	}
+}
 
 func (s *Server) handleAgentMessages(agent *AgentConn) {
 	// Initialize rate limiting
