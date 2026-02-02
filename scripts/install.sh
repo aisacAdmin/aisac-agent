@@ -213,14 +213,14 @@ EOF
     if command -v curl &> /dev/null; then
         response=$(curl -s -w "\n%{http_code}" -X POST "${register_url}" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${api_key}" \
+            -H "X-API-Key: ${api_key}" \
             -d "${payload}" 2>/dev/null)
         http_code=$(echo "$response" | tail -n1)
         response=$(echo "$response" | sed '$d')
     elif command -v wget &> /dev/null; then
         # wget doesn't easily return status codes, so we'll try a simpler approach
         response=$(wget -q -O - --header="Content-Type: application/json" \
-            --header="Authorization: Bearer ${api_key}" \
+            --header="X-API-Key: ${api_key}" \
             --post-data="${payload}" "${register_url}" 2>/dev/null)
         if [ $? -eq 0 ]; then
             http_code="200"
