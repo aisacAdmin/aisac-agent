@@ -24,9 +24,9 @@ BINARY_NAME="aisac-agent"
 
 # Default values
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
-DEFAULT_INGEST_URL="https://api.aisac.cisec.es/functions/v1/syslog-ingest"
-DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
-DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/functions/v1/agent-register"
+DEFAULT_INGEST_URL="https://api.aisac.cisec.es/v1/logs"
+DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
+DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/v1/register"
 SERVICE_WAS_RUNNING=false
 REGISTRATION_SUCCESS=false
 

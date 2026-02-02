@@ -64,7 +64,7 @@ server:
 heartbeat:
   enabled: true
   interval: 60s
-  url: "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
   api_key: "\${AISAC_API_KEY}"
 
 collector:
@@ -79,7 +79,7 @@ collector:
 
   output:
     type: http
-    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    url: "https://api.aisac.cisec.es/v1/logs"
     api_key: "\${AISAC_API_KEY}"
     timeout: 30s
     retry_attempts: 3

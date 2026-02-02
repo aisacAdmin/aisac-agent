@@ -140,16 +140,18 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 	return fmt.Errorf("failed after %d attempts: %w", o.cfg.RetryAttempts+1, lastErr)
 }
 
-// IngestPayload is the JSON structure expected by the syslog-ingest Edge Function.
+// IngestPayload is the JSON structure expected by the AISAC /v1/logs endpoint.
 type IngestPayload struct {
-	Events []*LogEvent `json:"events"`
+	AssetID string      `json:"asset_id"`
+	Logs    []*LogEvent `json:"logs"`
 }
 
 // preparePayload creates the JSON payload for the events.
 func (o *HTTPOutput) preparePayload(events []*LogEvent) ([]byte, error) {
-	// Create JSON payload with "events" array (format expected by AISAC platform)
+	// Create JSON payload with asset_id and logs array (format expected by AISAC platform)
 	payload := IngestPayload{
-		Events: events,
+		AssetID: o.cfg.AssetID,
+		Logs:    events,
 	}
 
 	return json.Marshal(payload)

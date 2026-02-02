@@ -26,7 +26,7 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("Default timeout = %v, want 10s", cfg.Timeout)
 	}
 
-	expectedURL := "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
+	expectedURL := "https://api.aisac.cisec.es/v1/heartbeat"
 	if cfg.URL != expectedURL {
 		t.Errorf("Default URL = %s, want %s", cfg.URL, expectedURL)
 	}
