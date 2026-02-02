@@ -38,7 +38,7 @@ print_banner() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════════╗"
     echo "║                                                               ║"
-    echo "║              AISAC Agent Installer v1.1                       ║"
+    echo "║              AISAC Agent Installer v1.2                       ║"
     echo "║                                                               ║"
     echo "║   Security Information and Event Management (SIEM) Agent      ║"
     echo "║   with Security Orchestration and Response (SOAR) Actions     ║"
@@ -284,15 +284,13 @@ generate_certificates() {
 
     mkdir -p "$cert_dir"
 
-    # Check if certificates already exist
-    if [ -f "$cert_dir/agent.crt" ] && [ -f "$cert_dir/agent.key" ] && [ -f "$cert_dir/ca.crt" ]; then
-        log_warning "Certificates already exist in $cert_dir"
-        if prompt_yes_no "Regenerate certificates? (will overwrite existing)" "n"; then
-            log_info "Regenerating certificates..."
-        else
-            log_info "Using existing certificates"
-            return 0
-        fi
+    # Remove old certificates to ensure clean state
+    # (This is important for reinstall scenarios where CA might have changed)
+    if [ -f "$cert_dir/ca.crt" ] || [ -f "$cert_dir/agent.crt" ] || [ -f "$cert_dir/server.crt" ]; then
+        log_info "Removing old certificates for clean regeneration..."
+        rm -f "$cert_dir/ca.crt" "$cert_dir/ca.key" "$cert_dir/ca.srl"
+        rm -f "$cert_dir/agent.crt" "$cert_dir/agent.key"
+        rm -f "$cert_dir/server.crt" "$cert_dir/server.key"
     fi
 
     # Generate CA private key
@@ -1139,39 +1137,113 @@ print_summary() {
 }
 
 #------------------------------------------------------------------------------
+# Certificate verification
+#------------------------------------------------------------------------------
+
+verify_certificates() {
+    local cert_dir="$1"
+
+    if [ ! -f "$cert_dir/ca.crt" ]; then
+        log_error "CA certificate not found: $cert_dir/ca.crt"
+        return 1
+    fi
+
+    if [ ! -f "$cert_dir/agent.crt" ]; then
+        log_error "Agent certificate not found: $cert_dir/agent.crt"
+        return 1
+    fi
+
+    if [ ! -f "$cert_dir/agent.key" ]; then
+        log_error "Agent key not found: $cert_dir/agent.key"
+        return 1
+    fi
+
+    # Verify agent certificate against CA
+    if ! openssl verify -CAfile "$cert_dir/ca.crt" "$cert_dir/agent.crt" &>/dev/null; then
+        log_error "Agent certificate verification failed - not signed by CA"
+        return 1
+    fi
+
+    # If server certificates exist, verify them too
+    if [ -f "$cert_dir/server.crt" ]; then
+        if ! openssl verify -CAfile "$cert_dir/ca.crt" "$cert_dir/server.crt" &>/dev/null; then
+            log_error "Server certificate verification failed - not signed by CA"
+            return 1
+        fi
+        log_success "Server certificate verified against CA"
+    fi
+
+    log_success "Agent certificate verified against CA"
+    return 0
+}
+
+#------------------------------------------------------------------------------
+# Cleanup function (stops all AISAC services)
+#------------------------------------------------------------------------------
+
+cleanup_services() {
+    log_info "Cleaning up existing AISAC services..."
+
+    # Stop and disable aisac-agent
+    if systemctl is-active --quiet aisac-agent 2>/dev/null; then
+        log_info "Stopping aisac-agent..."
+        systemctl stop aisac-agent 2>/dev/null || true
+    fi
+    systemctl disable aisac-agent 2>/dev/null || true
+
+    # Stop and disable aisac-server
+    if systemctl is-active --quiet aisac-server 2>/dev/null; then
+        log_info "Stopping aisac-server..."
+        systemctl stop aisac-server 2>/dev/null || true
+    fi
+    systemctl disable aisac-server 2>/dev/null || true
+
+    # Kill any lingering processes
+    pkill -f "aisac-agent" 2>/dev/null || true
+    pkill -f "aisac-server" 2>/dev/null || true
+
+    # Wait for processes to terminate
+    sleep 2
+
+    # Remove old service files
+    rm -f /etc/systemd/system/aisac-agent.service
+    rm -f /etc/systemd/system/aisac-server.service
+    systemctl daemon-reload
+
+    log_success "Services cleaned up"
+}
+
+#------------------------------------------------------------------------------
 # Uninstall function
 #------------------------------------------------------------------------------
 
 uninstall() {
     echo ""
-    log_warning "This will remove AISAC Agent from your system"
+    log_warning "This will remove AISAC Agent and Command Server from your system"
 
     if ! prompt_yes_no "Are you sure you want to uninstall?" "n"; then
         echo "Uninstall cancelled"
         exit 0
     fi
 
-    log_info "Stopping service..."
-    systemctl stop ${SERVICE_NAME} 2>/dev/null || true
-    systemctl disable ${SERVICE_NAME} 2>/dev/null || true
+    # Clean up all services
+    cleanup_services
 
-    log_info "Removing files..."
-    rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    log_info "Removing binaries..."
     rm -f /usr/local/bin/${BINARY_NAME}
+    rm -f /usr/local/bin/aisac-server
     rm -rf "$INSTALL_DIR"
 
-    systemctl daemon-reload
-
-    if prompt_yes_no "Remove configuration and data?" "n"; then
+    if prompt_yes_no "Remove configuration, data, and certificates?" "n"; then
         rm -rf "$CONFIG_DIR"
         rm -rf "$DATA_DIR"
         rm -rf "$LOG_DIR"
-        log_success "Configuration and data removed"
+        log_success "Configuration, data, and certificates removed"
     else
         log_info "Configuration preserved in $CONFIG_DIR"
     fi
 
-    log_success "AISAC Agent uninstalled"
+    log_success "AISAC Agent and Command Server uninstalled"
 }
 
 #------------------------------------------------------------------------------
@@ -1301,6 +1373,10 @@ main() {
     check_systemd
     echo ""
 
+    # Clean up any existing installation (ensures fresh state on reinstall)
+    cleanup_services
+    echo ""
+
     # Installation
     create_directories
     install_binary
@@ -1332,12 +1408,27 @@ main() {
     generate_config
     install_systemd_service
 
-    # Start services
+    # Verify certificates before starting services (if SOAR mode enabled)
+    if [ "$TLS_ENABLED" = "true" ]; then
+        echo ""
+        log_info "Verifying certificates..."
+        if ! verify_certificates "$CONFIG_DIR/certs"; then
+            log_error "Certificate verification failed. Services will not start correctly."
+            log_info "Please regenerate certificates or fix the issue before starting services."
+            exit 1
+        fi
+    fi
+
+    # Start services with proper sequence
     if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
-        # Start command server first if installed
+        # Start command server first if installed (must be ready before agent)
         if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
             start_command_server
+            # Wait for server to be fully ready
+            log_info "Waiting for command server to be fully ready..."
+            sleep 3
         fi
+
         log_info "Starting AISAC Agent..."
         systemctl start ${SERVICE_NAME}
         sleep 2
@@ -1345,12 +1436,16 @@ main() {
             log_success "AISAC Agent is running"
         else
             log_error "Failed to start AISAC Agent"
+            echo "Check logs with: journalctl -u ${SERVICE_NAME} -n 50"
         fi
     else
-        # Start command server first if installed
+        # Start command server first if installed (must be ready before agent)
         if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
             if prompt_yes_no "Start Command Server now?" "y"; then
                 start_command_server
+                # Wait for server to be fully ready
+                log_info "Waiting for command server to be fully ready..."
+                sleep 3
             fi
         fi
         start_service
