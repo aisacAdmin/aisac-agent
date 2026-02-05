@@ -47,26 +47,27 @@ Build Date: ` + buildDate + "\n")
 }
 
 func run(cmd *cobra.Command, args []string) error {
-	// Setup logger
-	logger := setupLogger()
+	// Load configuration first (need it for logging setup)
+	cfg, err := config.LoadAgentConfig(cfgFile)
+	if err != nil {
+		// Fallback to stdout logger for config errors
+		logger := setupLoggerWithConfig(nil)
+		logger.Fatal().Err(err).Str("config", cfgFile).Msg("Failed to load configuration")
+	}
+
+	// Override log level from CLI if specified
+	if logLevel != "" {
+		cfg.Logging.Level = logLevel
+	}
+
+	// Setup logger with config
+	logger := setupLoggerWithConfig(&cfg.Logging)
 
 	logger.Info().
 		Str("version", version).
 		Str("commit", commit).
 		Str("build_date", buildDate).
 		Msg("Starting AISAC Agent")
-
-	// Load configuration
-	cfg, err := config.LoadAgentConfig(cfgFile)
-	if err != nil {
-		logger.Fatal().Err(err).Str("config", cfgFile).Msg("Failed to load configuration")
-	}
-
-	// Override log level from CLI
-	if logLevel != "" {
-		cfg.Logging.Level = logLevel
-		logger = setupLoggerWithLevel(logLevel)
-	}
 
 	// Set agent version
 	agent.Version = version
@@ -97,13 +98,27 @@ func run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func setupLogger() zerolog.Logger {
-	return setupLoggerWithLevel("info")
-}
-
-func setupLoggerWithLevel(level string) zerolog.Logger {
+func setupLoggerWithConfig(logging *config.LoggingSettings) zerolog.Logger {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
+	// Default settings
+	level := "info"
+	output := "stdout"
+	file := ""
+
+	if logging != nil {
+		if logging.Level != "" {
+			level = logging.Level
+		}
+		if logging.Output != "" {
+			output = logging.Output
+		}
+		if logging.File != "" {
+			file = logging.File
+		}
+	}
+
+	// Parse log level
 	var l zerolog.Level
 	switch level {
 	case "debug":
@@ -118,7 +133,20 @@ func setupLoggerWithLevel(level string) zerolog.Logger {
 		l = zerolog.InfoLevel
 	}
 
-	return zerolog.New(os.Stdout).
+	// Determine output writer
+	var writer = os.Stdout
+	if output == "file" && file != "" {
+		f, err := os.OpenFile(file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			// Fallback to stdout if file cannot be opened, log warning to stderr
+			tempLogger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+			tempLogger.Warn().Err(err).Str("file", file).Msg("Failed to open log file, using stdout")
+		} else {
+			writer = f
+		}
+	}
+
+	return zerolog.New(writer).
 		Level(l).
 		With().
 		Timestamp().
