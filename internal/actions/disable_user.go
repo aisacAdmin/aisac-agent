@@ -36,7 +36,19 @@ func (a *DisableUserAction) Validate(params map[string]interface{}) error {
 	}
 
 	// Prevent disabling critical system accounts
-	protectedUsers := []string{"root", "Administrator", "SYSTEM", "LocalSystem"}
+	protectedUsers := []string{
+		// Windows
+		"Administrator", "SYSTEM", "LocalSystem", "LocalService", "NetworkService",
+		// Linux/Unix - root and system users
+		"root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
+		"news", "uucp", "proxy", "www-data", "backup", "list", "irc", "gnats",
+		"nobody", "systemd-network", "systemd-resolve", "systemd-timesync",
+		"messagebus", "syslog", "_apt", "tss", "uuidd", "tcpdump", "sshd",
+		"systemd-coredump", "lxd", "mysql", "postgres", "postfix", "bind",
+		// macOS
+		"_appserver", "_windowserver", "_securityagent", "_coreaudiod",
+	}
+
 	for _, protected := range protectedUsers {
 		if username == protected {
 			return fmt.Errorf("cannot disable protected system account: %s", username)

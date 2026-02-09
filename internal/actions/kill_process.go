@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/rs/zerolog"
 
@@ -39,22 +40,78 @@ func (a *KillProcessAction) Validate(params map[string]interface{}) error {
 	}
 
 	if hasPID {
+		var pidVal int
 		switch v := pid.(type) {
 		case float64:
 			if v <= 0 {
 				return fmt.Errorf("pid must be positive")
 			}
+			pidVal = int(v)
 		case int:
 			if v <= 0 {
 				return fmt.Errorf("pid must be positive")
 			}
+			pidVal = v
 		default:
 			return fmt.Errorf("pid must be a number")
+		}
+
+		// SECURITY: Never allow killing PID 1 (init/systemd)
+		if pidVal == 1 {
+			return fmt.Errorf("cannot kill init process (PID 1)")
 		}
 	}
 
 	if hasName && name == "" {
 		return fmt.Errorf("process_name cannot be empty")
+	}
+
+	// SECURITY: Validate process name against critical processes
+	if hasName {
+		if err := validateProcessName(name); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateProcessName checks if a process name is safe to kill.
+func validateProcessName(name string) error {
+	// List of critical processes that should never be killed
+	protectedProcesses := []string{
+		// Init systems
+		"init", "systemd", "launchd",
+		// SSH daemon
+		"sshd", "ssh-agent",
+		// System daemons (Linux)
+		"systemd-journald", "systemd-logind", "systemd-udevd",
+		"systemd-networkd", "systemd-resolved", "systemd-timesyncd",
+		"dbus-daemon", "dbus", "rsyslogd", "syslogd",
+		// Kernel threads (should never be killed anyway)
+		"kthreadd", "ksoftirqd", "kworker", "kswapd",
+		// Container runtimes
+		"dockerd", "containerd", "containerd-shim",
+		// macOS critical processes
+		"WindowServer", "loginwindow", "SystemUIServer", "Finder",
+		// Windows critical processes
+		"csrss.exe", "lsass.exe", "services.exe", "smss.exe", "winlogon.exe",
+		"explorer.exe", "System", "wininit.exe",
+		// AISAC agent itself
+		"aisac-agent", "aisac-server",
+	}
+
+	// Normalize process name (remove path and extension)
+	processName := strings.ToLower(name)
+	processName = strings.TrimSuffix(processName, ".exe")
+
+	// Check if base name matches any protected process
+	for _, baseName := range []string{name, processName} {
+		for _, protected := range protectedProcesses {
+			if baseName == protected || strings.Contains(baseName, protected) {
+				return fmt.Errorf("cannot kill protected system process: %s", name)
+			}
+		}
 	}
 
 	return nil
@@ -94,6 +151,11 @@ func (a *KillProcessAction) Execute(ctx context.Context, params map[string]inter
 		killAll := false
 		if ka, ok := params["kill_all"].(bool); ok {
 			killAll = ka
+		}
+
+		// Double-check protection before killing
+		if err := validateProcessName(name); err != nil {
+			return types.ActionResult{}, err
 		}
 
 		a.logger.Info().
