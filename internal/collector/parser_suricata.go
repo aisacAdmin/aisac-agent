@@ -165,11 +165,23 @@ func formatMessage(format string, args ...interface{}) string {
 func (p *SuricataEVEParser) assignSeverity(eventType string, eve map[string]interface{}) int {
 	switch eventType {
 	case "alert":
-		// WORKAROUND: Send all alerts as Low (1) to bypass platform filtering
-		// Platform currently only accepts severity 0-1, filtering out 2+
-		// TODO: Fix platform configuration to accept all severities
-		// The original Suricata severity is preserved in the "fields" for analysis
-		return SeverityLow
+		// Map Suricata severity to AISAC severity
+		// Suricata uses: 1=high, 2=medium, 3=low
+		// AISAC uses: 0=info, 1=low, 2=medium, 3=high, 4=critical
+		if alert, ok := eve["alert"].(map[string]interface{}); ok {
+			suricataSev := int(getFloatField(alert, "severity"))
+			switch suricataSev {
+			case 1:
+				return SeverityHigh // Suricata high → AISAC high (3)
+			case 2:
+				return SeverityMedium // Suricata medium → AISAC medium (2)
+			case 3:
+				return SeverityLow // Suricata low → AISAC low (1)
+			default:
+				return SeverityLow // Default to low if severity missing
+			}
+		}
+		return SeverityLow // Fallback if no alert object
 
 	case "anomaly", "drop", "pkthdr":
 		// Anomalies and drops should be indexed
