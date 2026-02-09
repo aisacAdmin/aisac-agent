@@ -171,20 +171,20 @@ func (p *SuricataEVEParser) assignSeverity(eventType string, eve map[string]inte
 		// The original Suricata severity is preserved in the "fields" for analysis
 		return SeverityLow
 
-	case "flow", "netflow", "stats":
-		// Network flows and stats are informational
-		return SeverityInfo
-
 	case "anomaly", "drop", "pkthdr":
-		// WORKAROUND: Send as Low to bypass platform filtering
+		// Anomalies and drops should be indexed
 		return SeverityLow
+
+	case "flow", "netflow", "stats":
+		// Telemetry: send as Medium to filter out
+		return SeverityMedium
 
 	case "dns", "http", "tls", "ssh", "smtp", "ftp", "smb", "rdp", "fileinfo":
-		// Protocol events are low severity (informational but useful for SIEM)
-		return SeverityLow
+		// Telemetry: send as Medium to filter out (not security alerts)
+		return SeverityMedium
 
 	default:
-		// Unknown event types default to low
-		return SeverityLow
+		// Unknown event types treated as telemetry
+		return SeverityMedium
 	}
 }
