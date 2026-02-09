@@ -66,12 +66,18 @@ func (p *SuricataEVEParser) Parse(line string) (*LogEvent, error) {
 		event.DestIP = dstIP
 	}
 
-	// Extract event type as tag
+	// Extract event type as tag and assign severity
 	if eventType, ok := eve["event_type"].(string); ok {
 		event.Tags = append(event.Tags, eventType)
 
 		// Build a message based on event type
 		event.Message = p.buildMessage(eventType, eve)
+
+		// Assign severity based on event type
+		event.Severity = p.assignSeverity(eventType, eve)
+	} else {
+		// Default to info if no event type
+		event.Severity = SeverityInfo
 	}
 
 	return event, nil
@@ -153,4 +159,45 @@ func getFloatField(m map[string]interface{}, key string) float64 {
 
 func formatMessage(format string, args ...interface{}) string {
 	return fmt.Sprintf(format, args...)
+}
+
+// assignSeverity assigns severity level based on event type and alert severity.
+func (p *SuricataEVEParser) assignSeverity(eventType string, eve map[string]interface{}) int {
+	switch eventType {
+	case "alert":
+		// Extract alert severity (Suricata uses 1=high, 2=medium, 3=low)
+		if alert, ok := eve["alert"].(map[string]interface{}); ok {
+			if severity, ok := alert["severity"].(float64); ok {
+				// Map Suricata severity to our scale
+				switch int(severity) {
+				case 1:
+					return SeverityCritical // Critical alerts
+				case 2:
+					return SeverityHigh // High priority alerts
+				case 3:
+					return SeverityMedium // Medium priority alerts
+				default:
+					return SeverityHigh
+				}
+			}
+		}
+		// If no severity field, treat as high by default
+		return SeverityHigh
+
+	case "flow", "netflow", "stats":
+		// Network flows and stats are informational
+		return SeverityInfo
+
+	case "anomaly", "drop", "pkthdr":
+		// Anomalies and drops are medium severity
+		return SeverityMedium
+
+	case "dns", "http", "tls", "ssh", "smtp", "ftp", "smb", "rdp", "fileinfo":
+		// Protocol events are low severity (informational but useful for SIEM)
+		return SeverityLow
+
+	default:
+		// Unknown event types default to low
+		return SeverityLow
+	}
 }

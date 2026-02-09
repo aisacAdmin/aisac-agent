@@ -11,6 +11,7 @@ type LogEvent struct {
 	Source    string                 `json:"source"`
 	TenantID  string                 `json:"tenant_id"`
 	Host      string                 `json:"host"`
+	Severity  int                    `json:"severity"`
 	SourceIP  string                 `json:"source_ip,omitempty"`
 	DestIP    string                 `json:"dest_ip,omitempty"`
 	Message   string                 `json:"message,omitempty"`
@@ -18,6 +19,15 @@ type LogEvent struct {
 	Fields    map[string]interface{} `json:"fields,omitempty"`
 	Tags      []string               `json:"tags,omitempty"`
 }
+
+// Severity levels for log events
+const (
+	SeverityInfo     = 0 // Informational (flow, stats, netflow)
+	SeverityLow      = 1 // Low severity (dns, http, tls queries)
+	SeverityMedium   = 2 // Medium severity (anomalies, suspicious behavior)
+	SeverityHigh     = 3 // High severity (security alerts)
+	SeverityCritical = 4 // Critical severity (critical security alerts)
+)
 
 // Parser parses raw log lines into structured LogEvent objects.
 type Parser interface {
