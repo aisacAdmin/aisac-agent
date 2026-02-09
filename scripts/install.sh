@@ -27,6 +27,7 @@ DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/v1/logs"
 DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
 DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/v1/register"
+DEFAULT_PLATFORM_WEBHOOK="https://api.aisac.cisec.es/v1/webhooks/agent-connected"
 SERVICE_WAS_RUNNING=false
 REGISTRATION_SUCCESS=false
 
@@ -399,6 +400,8 @@ generate_api_token() {
 
 install_command_server() {
     local api_token="$1"
+    local webhook_url="${PLATFORM_WEBHOOK_URL:-}"
+    local platform_key="${PLATFORM_API_KEY:-}"
 
     log_info "Installing AISAC Command Server..."
 
@@ -426,6 +429,25 @@ install_command_server() {
     # Create systemd service for command server
     log_info "Creating command server systemd service..."
 
+    # Build ExecStart command
+    local exec_cmd="$INSTALL_DIR/aisac-server \\\\\n"
+    exec_cmd+="    --listen :8443 \\\\\n"
+    exec_cmd+="    --cert $CONFIG_DIR/certs/server.crt \\\\\n"
+    exec_cmd+="    --key $CONFIG_DIR/certs/server.key \\\\\n"
+    exec_cmd+="    --ca $CONFIG_DIR/certs/ca.crt \\\\\n"
+    exec_cmd+="    --api-token \"${api_token}\" \\\\\n"
+    exec_cmd+="    --api-mtls=false \\\\\n"
+
+    # Add webhook parameters if configured
+    if [ -n "$webhook_url" ]; then
+        exec_cmd+="    --platform-webhook \"${webhook_url}\" \\\\\n"
+    fi
+    if [ -n "$platform_key" ]; then
+        exec_cmd+="    --platform-api-key \"${platform_key}\" \\\\\n"
+    fi
+
+    exec_cmd+="    --log-level info"
+
     cat > /etc/systemd/system/aisac-server.service << EOF
 [Unit]
 Description=AISAC Command Server (SOAR)
@@ -435,14 +457,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=$INSTALL_DIR/aisac-server \\
-    --listen :8443 \\
-    --cert $CONFIG_DIR/certs/server.crt \\
-    --key $CONFIG_DIR/certs/server.key \\
-    --ca $CONFIG_DIR/certs/ca.crt \\
-    --api-token "${api_token}" \\
-    --api-mtls=false \\
-    --log-level info
+ExecStart=$(echo -e "$exec_cmd")
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -688,6 +703,22 @@ configure_agent() {
             echo ""
             echo -e "${YELLOW}IMPORTANT: Save this token for n8n configuration:${NC}"
             echo -e "${CYAN}${SERVER_API_TOKEN}${NC}"
+            echo ""
+
+            # Platform webhook configuration
+            echo -e "${BLUE}Platform Webhook: Notify AISAC platform when agents connect.${NC}"
+            echo -e "${BLUE}This allows the platform to automatically save the API token for SOAR workflows.${NC}"
+            echo ""
+
+            if prompt_yes_no "Enable platform webhook notifications?" "y"; then
+                PLATFORM_WEBHOOK_URL=$(prompt "Platform webhook URL" "$DEFAULT_PLATFORM_WEBHOOK")
+                PLATFORM_API_KEY=$(prompt_password "Platform API key")
+                echo ""
+                log_success "Platform webhook configured"
+            else
+                PLATFORM_WEBHOOK_URL=""
+                PLATFORM_API_KEY=""
+            fi
             echo ""
         else
             SERVER_URL=$(prompt "Command Server WebSocket URL" "$DEFAULT_SERVER_URL")
