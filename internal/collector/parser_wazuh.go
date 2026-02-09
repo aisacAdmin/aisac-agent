@@ -65,7 +65,7 @@ func (p *WazuhAlertParser) Parse(line string) (*LogEvent, error) {
 		}
 	}
 
-	// Add tags from rule groups
+	// Add tags from rule groups and extract severity
 	event.Tags = append(event.Tags, "wazuh")
 	if rule, ok := alert["rule"].(map[string]interface{}); ok {
 		if groups, ok := rule["groups"].([]interface{}); ok {
@@ -86,6 +86,12 @@ func (p *WazuhAlertParser) Parse(line string) (*LogEvent, error) {
 				}
 			}
 		}
+
+		// Extract severity from rule level
+		event.Severity = p.assignSeverity(rule)
+	} else {
+		// Default to info if no rule
+		event.Severity = SeverityInfo
 	}
 
 	// Build message
@@ -132,4 +138,29 @@ func (p *WazuhAlertParser) buildMessage(alert map[string]interface{}) string {
 
 	return fmt.Sprintf("[%s] (Rule %s, Level %d) %s",
 		agentName, ruleID, int(level), description)
+}
+
+// assignSeverity assigns severity level based on Wazuh rule level.
+// Wazuh levels range from 0-15:
+// 0-3: Informational
+// 4-6: Low priority
+// 7-9: Medium priority
+// 10-12: High priority
+// 13-15: Critical
+func (p *WazuhAlertParser) assignSeverity(rule map[string]interface{}) int {
+	level := getFloatField(rule, "level")
+	ruleLevel := int(level)
+
+	switch {
+	case ruleLevel >= 13:
+		return SeverityCritical // Critical (13-15)
+	case ruleLevel >= 10:
+		return SeverityHigh // High (10-12)
+	case ruleLevel >= 7:
+		return SeverityMedium // Medium (7-9)
+	case ruleLevel >= 4:
+		return SeverityLow // Low (4-6)
+	default:
+		return SeverityInfo // Info (0-3)
+	}
 }
