@@ -175,6 +175,50 @@ collector:
     # Path to store file positions (for resume after restart)
     sincedb_path: /var/lib/aisac/sincedb.json
 
+# Control plane protection (IPs/domains that should NEVER be blocked)
+control_plane:
+  # List of control plane IPs (AISAC server, SOAR platform, etc.)
+  # These IPs will be protected from block_ip actions
+  ips:
+    - "10.0.0.1"      # AISAC server
+    - "10.0.0.2"      # n8n/SOAR orchestrator
+    # Add your control plane IPs here
+
+  # List of control plane domains
+  domains:
+    - "api.aisac.cisec.es"
+    - "n8n.example.com"
+
+  # Enable whitelist protection
+  always_allowed: true
+
+# Safety mechanisms for destructive SOAR actions
+safety:
+  # Path to persist active action state (survives agent restarts)
+  state_file: "/var/lib/aisac/safety_state.json"
+
+  # Enable auto-revert: automatically revert destructive actions after TTL expires
+  auto_revert_enabled: true
+
+  # Default TTL for reversible actions (if not specified per-action)
+  default_ttl: 1h
+
+  # Per-action TTL overrides
+  action_ttls:
+    block_ip: 1h       # IP blocks auto-revert after 1 hour
+    isolate_host: 30m  # Host isolation auto-reverts after 30 minutes
+    disable_user: 2h   # User disables auto-revert after 2 hours
+
+  # Heartbeat Auto-Recovery: if heartbeat fails consecutively, trigger recovery
+  # This prevents the agent from being locked out if it loses connectivity
+  heartbeat_failure_threshold: 5  # Number of consecutive failures before recovery
+
+  # Actions to execute on heartbeat failure recovery
+  # These are triggered automatically when the failure threshold is exceeded
+  recovery_actions:
+    - unisolate_host   # Restore network connectivity
+    - unblock_all_ips  # Remove all IP blocks
+
 logging:
   # Log level: debug, info, warn, error
   level: "info"

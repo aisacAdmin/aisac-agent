@@ -8,11 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // DebugCollector enables detailed logging when set via environment variable
@@ -22,6 +23,7 @@ var DebugCollector = os.Getenv("AISAC_DEBUG_COLLECTOR") == "true"
 type HTTPOutput struct {
 	cfg        OutputConfig
 	httpClient *http.Client
+	logger     zerolog.Logger
 
 	// Statistics
 	mu            sync.RWMutex
@@ -31,10 +33,12 @@ type HTTPOutput struct {
 }
 
 // NewHTTPOutput creates a new HTTP output.
-func NewHTTPOutput(cfg OutputConfig) (*HTTPOutput, error) {
+func NewHTTPOutput(cfg OutputConfig, logger zerolog.Logger) (*HTTPOutput, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("HTTP output URL is required")
 	}
+
+	l := logger.With().Str("component", "http_output").Logger()
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -47,12 +51,16 @@ func NewHTTPOutput(cfg OutputConfig) (*HTTPOutput, error) {
 	}
 
 	if DebugCollector {
-		log.Printf("[DEBUG] HTTPOutput: URL=%s, Timeout=%v, RetryAttempts=%d",
-			cfg.URL, cfg.Timeout, cfg.RetryAttempts)
+		l.Debug().
+			Str("url", cfg.URL).
+			Dur("timeout", cfg.Timeout).
+			Int("retry_attempts", cfg.RetryAttempts).
+			Msg("HTTPOutput initialized")
 	}
 
 	return &HTTPOutput{
-		cfg: cfg,
+		cfg:    cfg,
+		logger: l,
 		httpClient: &http.Client{
 			Timeout:   cfg.Timeout,
 			Transport: transport,
@@ -72,11 +80,16 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 	}
 
 	if DebugCollector {
-		log.Printf("[DEBUG] HTTPOutput.Send: Sending %d events to %s", len(events), o.cfg.URL)
+		o.logger.Debug().
+			Int("event_count", len(events)).
+			Str("url", o.cfg.URL).
+			Msg("Sending events")
 		// Log first event as sample
 		if len(events) > 0 {
 			sample, _ := json.MarshalIndent(events[0], "", "  ")
-			log.Printf("[DEBUG] HTTPOutput.Send: Sample event:\n%s", string(sample))
+			o.logger.Debug().
+				Str("sample_event", string(sample)).
+				Msg("Sample event")
 		}
 	}
 
@@ -87,12 +100,18 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 	}
 
 	if DebugCollector {
-		log.Printf("[DEBUG] HTTPOutput.Send: Payload size (uncompressed): %d bytes", len(payload))
+		o.logger.Debug().
+			Int("payload_size", len(payload)).
+			Msg("Payload prepared")
 		// Log raw payload (first 500 chars)
 		if len(payload) > 500 {
-			log.Printf("[DEBUG] HTTPOutput.Send: Payload preview:\n%s...", string(payload[:500]))
+			o.logger.Debug().
+				Str("payload_preview", string(payload[:500])+"...").
+				Msg("Payload preview")
 		} else {
-			log.Printf("[DEBUG] HTTPOutput.Send: Full payload:\n%s", string(payload))
+			o.logger.Debug().
+				Str("payload", string(payload)).
+				Msg("Full payload")
 		}
 	}
 
@@ -103,8 +122,11 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 	}
 
 	if DebugCollector {
-		log.Printf("[DEBUG] HTTPOutput.Send: Compressed size: %d bytes (%.1f%% compression)",
-			len(compressed), float64(len(compressed))/float64(len(payload))*100)
+		compressionRatio := float64(len(compressed)) / float64(len(payload)) * 100
+		o.logger.Debug().
+			Int("compressed_size", len(compressed)).
+			Float64("compression_ratio", compressionRatio).
+			Msg("Payload compressed")
 	}
 
 	// Send with retries
@@ -112,7 +134,10 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 	for attempt := 0; attempt <= o.cfg.RetryAttempts; attempt++ {
 		if attempt > 0 {
 			if DebugCollector {
-				log.Printf("[DEBUG] HTTPOutput.Send: Retry attempt %d/%d", attempt, o.cfg.RetryAttempts)
+				o.logger.Debug().
+					Int("attempt", attempt).
+					Int("max_attempts", o.cfg.RetryAttempts).
+					Msg("Retry attempt")
 			}
 			select {
 			case <-ctx.Done():
@@ -125,14 +150,19 @@ func (o *HTTPOutput) Send(ctx context.Context, events []*LogEvent) error {
 		if err == nil {
 			o.recordSuccess(len(events))
 			if DebugCollector {
-				log.Printf("[DEBUG] HTTPOutput.Send: SUCCESS - sent %d events", len(events))
+				o.logger.Debug().
+					Int("event_count", len(events)).
+					Msg("SUCCESS - events sent")
 			}
 			return nil
 		}
 
 		lastErr = err
 		if DebugCollector {
-			log.Printf("[DEBUG] HTTPOutput.Send: Attempt %d failed: %v", attempt+1, err)
+			o.logger.Debug().
+				Int("attempt", attempt+1).
+				Err(err).
+				Msg("Attempt failed")
 		}
 	}
 
@@ -198,11 +228,13 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 	}
 
 	if DebugCollector {
-		log.Printf("[DEBUG] HTTPOutput.doRequest: POST %s", o.cfg.URL)
-		log.Printf("[DEBUG] HTTPOutput.doRequest: Headers: Content-Type=%s, Content-Encoding=%s, Auth=%v",
-			req.Header.Get("Content-Type"),
-			req.Header.Get("Content-Encoding"),
-			o.cfg.APIKey != "")
+		o.logger.Debug().
+			Str("method", "POST").
+			Str("url", o.cfg.URL).
+			Str("content_type", req.Header.Get("Content-Type")).
+			Str("content_encoding", req.Header.Get("Content-Encoding")).
+			Bool("has_api_key", o.cfg.APIKey != "").
+			Msg("Making HTTP request")
 	}
 
 	resp, err := o.httpClient.Do(req)
@@ -215,8 +247,10 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 
 	if DebugCollector {
-		log.Printf("[DEBUG] HTTPOutput.doRequest: Response status=%d, body=%s",
-			resp.StatusCode, string(body))
+		o.logger.Debug().
+			Int("status_code", resp.StatusCode).
+			Str("response_body", string(body)).
+			Msg("HTTP response received")
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

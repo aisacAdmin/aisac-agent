@@ -51,7 +51,7 @@ func New(cfg Config, logger zerolog.Logger) (*Collector, error) {
 	}
 
 	// Create output
-	output, err := NewOutput(cfg.Output)
+	output, err := NewOutput(cfg.Output, logger)
 	if err != nil {
 		return nil, fmt.Errorf("creating output: %w", err)
 	}

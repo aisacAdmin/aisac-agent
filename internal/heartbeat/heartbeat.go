@@ -24,7 +24,14 @@ type Config struct {
 	Interval      time.Duration `yaml:"interval"`
 	Timeout       time.Duration `yaml:"timeout"`
 	SkipTLSVerify bool          `yaml:"skip_tls_verify"`
+
+	// Safety: auto-recovery on consecutive failures
+	FailureThreshold int      `yaml:"failure_threshold"` // Number of consecutive failures before triggering recovery
+	RecoveryActions  []string `yaml:"recovery_actions"`  // Actions to trigger on recovery (e.g., "unisolate_host")
 }
+
+// RecoveryCallback is called when consecutive heartbeat failures exceed the threshold.
+type RecoveryCallback func(ctx context.Context, actions []string)
 
 // DefaultConfig returns default heartbeat configuration.
 func DefaultConfig() Config {
@@ -100,6 +107,11 @@ type Client struct {
 	// Stats
 	totalSent   int64
 	totalFailed int64
+
+	// Auto-recovery
+	consecutiveFailures int
+	recoveryTriggered   bool
+	recoveryCallback    RecoveryCallback
 }
 
 // NewClient creates a new heartbeat client.
@@ -125,6 +137,13 @@ func NewClient(cfg Config, version string, logger zerolog.Logger) *Client {
 		version:  version,
 		interval: cfg.Interval,
 	}
+}
+
+// SetRecoveryCallback sets the callback function for auto-recovery.
+func (c *Client) SetRecoveryCallback(cb RecoveryCallback) {
+	c.mu.Lock()
+	c.recoveryCallback = cb
+	c.mu.Unlock()
 }
 
 // Start begins the heartbeat loop.
@@ -187,14 +206,14 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		c.logger.Error().Err(err).Msg("Failed to marshal heartbeat payload")
-		c.recordError(err)
+		c.recordError(ctx, err)
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.cfg.URL, bytes.NewReader(body))
 	if err != nil {
 		c.logger.Error().Err(err).Msg("Failed to create heartbeat request")
-		c.recordError(err)
+		c.recordError(ctx, err)
 		return
 	}
 
@@ -205,7 +224,7 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.logger.Warn().Err(err).Msg("Heartbeat request failed, will retry")
-		c.recordError(err)
+		c.recordError(ctx, err)
 		// On network error, retry sooner
 		c.mu.Lock()
 		c.interval = 60 * time.Second
@@ -220,7 +239,7 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 		c.logger.Error().
 			Int("status", resp.StatusCode).
 			Msg("Heartbeat unauthorized - invalid API Key, stopping heartbeat")
-		c.recordError(fmt.Errorf("unauthorized: invalid API Key"))
+		c.recordError(ctx, fmt.Errorf("unauthorized: invalid API Key"))
 		// Stop heartbeat on auth failure
 		c.mu.Lock()
 		c.running = false
@@ -233,14 +252,14 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 			Int("status", resp.StatusCode).
 			Str("body", string(respBody)).
 			Msg("Heartbeat failed")
-		c.recordError(fmt.Errorf("status %d", resp.StatusCode))
+		c.recordError(ctx, fmt.Errorf("status %d", resp.StatusCode))
 		return
 	}
 
 	var response Response
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		c.logger.Warn().Err(err).Msg("Failed to parse heartbeat response")
-		c.recordError(err)
+		c.recordError(ctx, err)
 		return
 	}
 
@@ -262,6 +281,14 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 	c.lastSent = time.Now()
 	c.lastErr = nil
 	c.totalSent++
+	// Reset failure tracking on successful heartbeat
+	if c.consecutiveFailures > 0 {
+		c.logger.Info().
+			Int("previous_consecutive_failures", c.consecutiveFailures).
+			Msg("Heartbeat recovered, resetting failure counter")
+	}
+	c.consecutiveFailures = 0
+	c.recoveryTriggered = false
 	c.mu.Unlock()
 
 	c.logger.Info().
@@ -271,12 +298,39 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 		Msg("Heartbeat sent successfully")
 }
 
-// recordError records a heartbeat error.
-func (c *Client) recordError(err error) {
+// recordError records a heartbeat error and checks for recovery trigger.
+func (c *Client) recordError(ctx context.Context, err error) {
 	c.mu.Lock()
 	c.lastErr = err
 	c.totalFailed++
+	c.consecutiveFailures++
+
+	shouldTriggerRecovery := false
+	if c.cfg.FailureThreshold > 0 &&
+		c.consecutiveFailures >= c.cfg.FailureThreshold &&
+		!c.recoveryTriggered &&
+		c.recoveryCallback != nil &&
+		len(c.cfg.RecoveryActions) > 0 {
+		shouldTriggerRecovery = true
+		c.recoveryTriggered = true
+	}
+
+	failures := c.consecutiveFailures
+	threshold := c.cfg.FailureThreshold
+	actions := c.cfg.RecoveryActions
+	callback := c.recoveryCallback
 	c.mu.Unlock()
+
+	if shouldTriggerRecovery {
+		c.logger.Warn().
+			Int("consecutive_failures", failures).
+			Int("threshold", threshold).
+			Strs("recovery_actions", actions).
+			Msg("Heartbeat failure threshold exceeded, triggering auto-recovery")
+
+		// Trigger recovery in a goroutine to avoid blocking
+		go callback(ctx, actions)
+	}
 }
 
 // Stats returns heartbeat statistics.
@@ -285,21 +339,25 @@ func (c *Client) Stats() Stats {
 	defer c.mu.RUnlock()
 
 	return Stats{
-		Running:     c.running,
-		Interval:    c.interval,
-		LastSent:    c.lastSent,
-		LastError:   c.lastErr,
-		TotalSent:   c.totalSent,
-		TotalFailed: c.totalFailed,
+		Running:             c.running,
+		Interval:            c.interval,
+		LastSent:            c.lastSent,
+		LastError:           c.lastErr,
+		TotalSent:           c.totalSent,
+		TotalFailed:         c.totalFailed,
+		ConsecutiveFailures: c.consecutiveFailures,
+		RecoveryTriggered:   c.recoveryTriggered,
 	}
 }
 
 // Stats contains heartbeat statistics.
 type Stats struct {
-	Running     bool          `json:"running"`
-	Interval    time.Duration `json:"interval"`
-	LastSent    time.Time     `json:"last_sent"`
-	LastError   error         `json:"last_error,omitempty"`
-	TotalSent   int64         `json:"total_sent"`
-	TotalFailed int64         `json:"total_failed"`
+	Running             bool          `json:"running"`
+	Interval            time.Duration `json:"interval"`
+	LastSent            time.Time     `json:"last_sent"`
+	LastError           error         `json:"last_error,omitempty"`
+	TotalSent           int64         `json:"total_sent"`
+	TotalFailed         int64         `json:"total_failed"`
+	ConsecutiveFailures int           `json:"consecutive_failures"`
+	RecoveryTriggered   bool          `json:"recovery_triggered"`
 }

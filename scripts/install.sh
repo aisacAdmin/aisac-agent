@@ -818,6 +818,41 @@ configure_agent() {
     fi
 
     #--------------------------------------------------------------------------
+    # Step 6: Safety Configuration (only if SOAR is enabled)
+    #--------------------------------------------------------------------------
+    ADDITIONAL_CONTROL_PLANE_IPS=""
+
+    if [ "$SOAR_ENABLED" = "true" ]; then
+        echo ""
+        echo -e "${YELLOW}--- Step 6: Safety Configuration ---${NC}"
+        echo -e "${BLUE}Safety features protect against accidental lockout:${NC}"
+        echo -e "${BLUE}  • Control Plane Whitelist: IPs that can never be blocked${NC}"
+        echo -e "${BLUE}  • Auto-Revert: Actions automatically undo after TTL expires${NC}"
+        echo -e "${BLUE}  • Heartbeat Recovery: Auto-recovery if agent loses connectivity${NC}"
+        echo ""
+        echo -e "${GREEN}Detected control plane endpoints (auto-protected):${NC}"
+        [ -n "$SERVER_URL" ] && echo -e "  • Command Server: $SERVER_URL"
+        [ -n "$HEARTBEAT_URL" ] && echo -e "  • Heartbeat: ${HEARTBEAT_URL:-$DEFAULT_HEARTBEAT_URL}"
+        [ "$COLLECTOR_ENABLED" = "true" ] && echo -e "  • Log Ingest: $INGEST_URL"
+        echo ""
+
+        if prompt_yes_no "Add additional control plane IPs? (SSH bastion, VPN, etc.)" "n"; then
+            echo ""
+            echo -e "${BLUE}Enter additional IPs to whitelist (comma-separated):${NC}"
+            echo -e "${BLUE}Example: 10.0.0.1, 192.168.1.100${NC}"
+            local extra_ips=$(prompt "Additional IPs" "")
+            if [ -n "$extra_ips" ]; then
+                # Convert comma-separated to YAML format
+                ADDITIONAL_CONTROL_PLANE_IPS=$(echo "$extra_ips" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | while read ip; do
+                    [ -n "$ip" ] && echo "    - \"$ip\""
+                done)
+            fi
+        fi
+
+        log_success "Safety features configured"
+    fi
+
+    #--------------------------------------------------------------------------
     # Summary
     #--------------------------------------------------------------------------
     echo ""
@@ -835,6 +870,9 @@ configure_agent() {
         [ "$ENABLE_SYSLOG" = "true" ] && echo -e "    - Syslog:     ${SYSLOG_PATH:-/var/log/syslog}"
     fi
     echo -e "  ${CYAN}Heartbeat:${NC}      ${HEARTBEAT_ENABLED}"
+    if [ "$SOAR_ENABLED" = "true" ]; then
+        echo -e "  ${CYAN}Safety:${NC}         Enabled (Whitelist + Auto-Revert + Recovery)"
+    fi
     if [ "$REGISTRATION_SUCCESS" = "true" ]; then
         echo -e "  ${GREEN}Registration:${NC}   ✓ Registered with platform"
     else
@@ -982,7 +1020,106 @@ EOF
 EOF
     fi
 
+    # Extract control plane domains/IPs from configured URLs
+    local control_plane_ips=""
+    local control_plane_domains=""
+
+    # Extract domain from SERVER_URL (wss://host:port/path -> host)
+    if [ -n "$SERVER_URL" ] && [ "$SOAR_ENABLED" = "true" ]; then
+        local server_host=$(echo "$SERVER_URL" | sed -E 's|^wss?://([^:/]+).*|\1|')
+        if [ -n "$server_host" ]; then
+            # Check if it's an IP or domain
+            if echo "$server_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                control_plane_ips="    - \"$server_host\"      # SOAR Command Server"
+            else
+                control_plane_domains="    - \"$server_host\""
+            fi
+        fi
+    fi
+
+    # Extract domain from HEARTBEAT_URL
+    if [ -n "$HEARTBEAT_URL" ] || [ -n "$DEFAULT_HEARTBEAT_URL" ]; then
+        local hb_url="${HEARTBEAT_URL:-$DEFAULT_HEARTBEAT_URL}"
+        local hb_host=$(echo "$hb_url" | sed -E 's|^https?://([^:/]+).*|\1|')
+        if [ -n "$hb_host" ]; then
+            if [ -n "$control_plane_domains" ]; then
+                control_plane_domains="$control_plane_domains
+    - \"$hb_host\""
+            else
+                control_plane_domains="    - \"$hb_host\""
+            fi
+        fi
+    fi
+
+    # Extract domain from INGEST_URL (collector)
+    if [ -n "$INGEST_URL" ] && [ "$COLLECTOR_ENABLED" = "true" ]; then
+        local ingest_host=$(echo "$INGEST_URL" | sed -E 's|^https?://([^:/]+).*|\1|')
+        if [ -n "$ingest_host" ]; then
+            # Avoid duplicates
+            if ! echo "$control_plane_domains" | grep -q "$ingest_host"; then
+                if [ -n "$control_plane_domains" ]; then
+                    control_plane_domains="$control_plane_domains
+    - \"$ingest_host\""
+                else
+                    control_plane_domains="    - \"$ingest_host\""
+                fi
+            fi
+        fi
+    fi
+
+    # Add user-provided additional IPs
+    if [ -n "$ADDITIONAL_CONTROL_PLANE_IPS" ]; then
+        if [ -n "$control_plane_ips" ]; then
+            control_plane_ips="$control_plane_ips
+$ADDITIONAL_CONTROL_PLANE_IPS"
+        else
+            control_plane_ips="$ADDITIONAL_CONTROL_PLANE_IPS"
+        fi
+    fi
+
+    # Default control plane entries if none extracted
+    if [ -z "$control_plane_ips" ]; then
+        control_plane_ips="    # Add your control plane IPs here (SOAR server, management, etc.)
+    # - \"10.0.0.1\""
+    fi
+    if [ -z "$control_plane_domains" ]; then
+        control_plane_domains="    - \"api.aisac.cisec.es\""
+    fi
+
     cat >> "$config_file" << EOF
+
+# Control plane protection (IPs/domains that should NEVER be blocked)
+# These are auto-detected from your configured URLs
+control_plane:
+  ips:
+$control_plane_ips
+  domains:
+$control_plane_domains
+  always_allowed: true
+
+# Safety mechanisms for destructive SOAR actions
+safety:
+  # Persist active actions to survive agent restarts
+  state_file: "${DATA_DIR}/safety_state.json"
+
+  # Auto-revert: automatically undo destructive actions after TTL expires
+  auto_revert_enabled: true
+
+  # Default TTL for reversible actions
+  default_ttl: 1h
+
+  # Per-action TTL overrides
+  action_ttls:
+    isolate_host: 30m   # Critical: short TTL - most disruptive action
+    block_ip: 4h        # IP blocks revert after 4 hours
+    disable_user: 2h    # User disables revert after 2 hours
+
+  # Heartbeat Auto-Recovery: if agent loses connectivity, trigger recovery
+  # Prevents lockout if an action accidentally blocks the agent
+  heartbeat_failure_threshold: 5   # 5 failures x 2min = ~10 min before recovery
+  recovery_actions:
+    - unisolate_host    # Restore network connectivity
+    - unblock_all_ips   # Remove all IP blocks
 
 logging:
   level: "info"
@@ -993,6 +1130,7 @@ EOF
 
     chmod 600 "$config_file"
     log_success "Configuration saved to $config_file"
+    log_info "Safety features enabled: Control Plane Whitelist, TTL Auto-Revert, Heartbeat Recovery"
 }
 
 install_systemd_service() {
@@ -1070,6 +1208,15 @@ print_summary() {
         echo -e "  ${GREEN}✓ Agent registered with AISAC platform${NC}"
     else
         echo -e "  ${YELLOW}○ Agent running in offline mode${NC}"
+    fi
+
+    # Safety features status (only for SOAR mode)
+    if [ "$SOAR_ENABLED" = "true" ]; then
+        echo ""
+        echo -e "  ${CYAN}Safety Features:${NC}"
+        echo -e "    ${GREEN}✓${NC} Control Plane Whitelist (protected IPs/domains)"
+        echo -e "    ${GREEN}✓${NC} Auto-Revert (isolate_host: 30m, block_ip: 4h)"
+        echo -e "    ${GREEN}✓${NC} Heartbeat Recovery (after 5 consecutive failures)"
     fi
 
     # Command server status

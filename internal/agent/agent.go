@@ -21,6 +21,7 @@ import (
 	"github.com/cisec/aisac-agent/internal/collector"
 	"github.com/cisec/aisac-agent/internal/config"
 	"github.com/cisec/aisac-agent/internal/heartbeat"
+	"github.com/cisec/aisac-agent/internal/safety"
 	"github.com/cisec/aisac-agent/pkg/protocol"
 	"github.com/cisec/aisac-agent/pkg/types"
 )
@@ -38,6 +39,7 @@ type Agent struct {
 	callback   *callback.Client
 	collector  *collector.Collector
 	heartbeat  *heartbeat.Client
+	safety     *safety.Manager
 	info       types.AgentInfo
 	infoMu     sync.RWMutex // Protects info.Status
 
@@ -109,11 +111,48 @@ func New(cfg *config.AgentConfig, logger zerolog.Logger) (*Agent, error) {
 
 	// Initialize heartbeat client if enabled
 	if cfg.Heartbeat.Enabled {
-		agent.heartbeat = heartbeat.NewClient(cfg.Heartbeat, Version, logger)
+		// Copy heartbeat config and add safety settings
+		hbCfg := cfg.Heartbeat
+		hbCfg.FailureThreshold = cfg.Safety.HeartbeatFailureThreshold
+		hbCfg.RecoveryActions = cfg.Safety.RecoveryActions
+
+		agent.heartbeat = heartbeat.NewClient(hbCfg, Version, logger)
 		logger.Info().
 			Str("asset_id", cfg.Heartbeat.AssetID).
 			Dur("interval", cfg.Heartbeat.Interval).
+			Int("failure_threshold", hbCfg.FailureThreshold).
+			Strs("recovery_actions", hbCfg.RecoveryActions).
 			Msg("Heartbeat client initialized")
+	}
+
+	// Initialize safety manager (control plane whitelist, TTL, auto-revert)
+	safetyCfg := safety.Config{
+		StateFile:                 cfg.Safety.StateFile,
+		DefaultTTL:                cfg.Safety.DefaultTTL,
+		ActionTTLs:                cfg.Safety.ActionTTLs,
+		AutoRevertEnabled:         cfg.Safety.AutoRevertEnabled,
+		HeartbeatFailureThreshold: cfg.Safety.HeartbeatFailureThreshold,
+		RecoveryActions:           cfg.Safety.RecoveryActions,
+		WhitelistIPs:              cfg.ControlPlane.IPs,
+		WhitelistDomains:          cfg.ControlPlane.Domains,
+		WhitelistEnabled:          cfg.ControlPlane.AlwaysAllowed,
+	}
+	safetyMgr, err := safety.NewManager(safetyCfg, logger, agent.executeRevertAction)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("creating safety manager: %w", err)
+	}
+	agent.safety = safetyMgr
+	logger.Info().
+		Int("whitelist_ips", len(cfg.ControlPlane.IPs)).
+		Int("whitelist_domains", len(cfg.ControlPlane.Domains)).
+		Bool("auto_revert_enabled", cfg.Safety.AutoRevertEnabled).
+		Msg("Safety manager initialized")
+
+	// Wire up heartbeat auto-recovery callback to safety manager
+	if agent.heartbeat != nil && safetyMgr != nil {
+		agent.heartbeat.SetRecoveryCallback(safetyMgr.TriggerRecovery)
+		logger.Info().Msg("Heartbeat auto-recovery wired to safety manager")
 	}
 
 	return agent, nil
@@ -128,6 +167,11 @@ func (a *Agent) Run() error {
 		Bool("collector_enabled", a.cfg.Collector.Enabled).
 		Bool("heartbeat_enabled", a.cfg.Heartbeat.Enabled).
 		Msg("Starting AISAC agent")
+
+	// Start safety manager (TTL monitoring, auto-revert)
+	if a.safety != nil {
+		a.safety.Start(a.ctx)
+	}
 
 	// Start collector if enabled (runs independently of server connection)
 	if a.collector != nil {
@@ -211,6 +255,11 @@ func (a *Agent) Shutdown() {
 		cancel()
 	}
 	a.activeTasksMu.Unlock()
+
+	// Stop safety manager (persists state)
+	if a.safety != nil {
+		a.safety.Stop()
+	}
 
 	// Stop collector if running
 	if a.collector != nil {
@@ -392,6 +441,18 @@ func (a *Agent) executeCommand(cmd *protocol.Command) {
 		return
 	}
 
+	// SAFETY: Validate action against control plane whitelist
+	if a.safety != nil {
+		if err := a.safety.ValidateAction(string(cmd.Action), cmd.Parameters); err != nil {
+			logger.Warn().Err(err).Msg("Action blocked by safety rules")
+			a.sendResponse(cmd, types.StatusFailed, types.ActionResult{
+				Success: false,
+				Error:   fmt.Sprintf("safety violation: %s", err.Error()),
+			}, 0)
+			return
+		}
+	}
+
 	// Create cancellable context
 	timeout := time.Duration(cmd.TimeoutSeconds) * time.Second
 	if timeout == 0 {
@@ -436,6 +497,18 @@ func (a *Agent) executeCommand(cmd *protocol.Command) {
 		logger.Error().Err(err).Msg("Command execution failed")
 	} else {
 		logger.Info().Int64("duration_ms", elapsed).Msg("Command execution completed")
+
+		// SAFETY: Register reversible action with TTL for auto-revert
+		if a.safety != nil && a.cfg.Safety.AutoRevertEnabled {
+			if reversible, revertAction := config.IsReversibleAction(string(cmd.Action)); reversible {
+				ttl := a.cfg.GetActionTTL(string(cmd.Action))
+				a.safety.RegisterAction(cmd.ID, string(cmd.Action), cmd.Parameters, ttl, revertAction)
+				logger.Info().
+					Str("revert_action", revertAction).
+					Dur("ttl", ttl).
+					Msg("Action registered for auto-revert")
+			}
+		}
 	}
 
 	a.sendResponse(cmd, status, result, elapsed)
@@ -592,4 +665,22 @@ func (a *Agent) waitReconnect() {
 	case <-a.ctx.Done():
 	case <-time.After(delay):
 	}
+}
+
+// executeRevertAction is called by the safety manager to auto-revert an action.
+func (a *Agent) executeRevertAction(ctx context.Context, action string, params map[string]interface{}) error {
+	a.logger.Info().
+		Str("action", action).
+		Interface("params", params).
+		Msg("Executing auto-revert action")
+
+	actCtx := types.ActionContext{
+		ExecutionID: fmt.Sprintf("auto-revert-%d", time.Now().Unix()),
+		CommandID:   fmt.Sprintf("revert-%d", time.Now().Unix()),
+		AgentID:     a.info.ID,
+		Timeout:     a.cfg.Actions.DefaultTimeout,
+	}
+
+	_, err := a.executor.Execute(ctx, types.ActionType(action), params, actCtx)
+	return err
 }

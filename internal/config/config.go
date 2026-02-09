@@ -13,14 +13,16 @@ import (
 
 // AgentConfig holds the agent configuration.
 type AgentConfig struct {
-	Agent     AgentSettings     `yaml:"agent"`
-	Server    ServerSettings    `yaml:"server"`
-	TLS       TLSSettings       `yaml:"tls"`
-	Actions   ActionsSettings   `yaml:"actions"`
-	Callback  CallbackSettings  `yaml:"callback"`
-	Collector collector.Config  `yaml:"collector"`
-	Heartbeat heartbeat.Config  `yaml:"heartbeat"`
-	Logging   LoggingSettings   `yaml:"logging"`
+	Agent        AgentSettings        `yaml:"agent"`
+	Server       ServerSettings       `yaml:"server"`
+	TLS          TLSSettings          `yaml:"tls"`
+	Actions      ActionsSettings      `yaml:"actions"`
+	Callback     CallbackSettings     `yaml:"callback"`
+	Collector    collector.Config     `yaml:"collector"`
+	Heartbeat    heartbeat.Config     `yaml:"heartbeat"`
+	Logging      LoggingSettings      `yaml:"logging"`
+	ControlPlane ControlPlaneSettings `yaml:"control_plane"`
+	Safety       SafetySettings       `yaml:"safety"`
 }
 
 // AgentSettings contains agent-specific settings.
@@ -82,6 +84,36 @@ type CallbackSettings struct {
 	SkipTLSVerify bool          `yaml:"skip_tls_verify"`
 }
 
+// ControlPlaneSettings contains control plane whitelist configuration.
+// These IPs/domains will never be blocked to prevent agent lockout.
+type ControlPlaneSettings struct {
+	IPs           []string `yaml:"ips"`
+	Domains       []string `yaml:"domains"`
+	AlwaysAllowed bool     `yaml:"always_allowed"`
+}
+
+// SafetySettings contains safety mechanisms for destructive actions.
+type SafetySettings struct {
+	// DefaultTTL is the default time-to-live for reversible actions
+	DefaultTTL time.Duration `yaml:"default_ttl"`
+
+	// ActionTTLs allows per-action TTL configuration
+	ActionTTLs map[string]time.Duration `yaml:"action_ttls"`
+
+	// AutoRevertEnabled enables automatic reversion when TTL expires
+	AutoRevertEnabled bool `yaml:"auto_revert_enabled"`
+
+	// StateFile is the path to persist active actions (for restart recovery)
+	StateFile string `yaml:"state_file"`
+
+	// HeartbeatFailureThreshold is the number of consecutive heartbeat failures
+	// before triggering auto-recovery
+	HeartbeatFailureThreshold int `yaml:"heartbeat_failure_threshold"`
+
+	// RecoveryActions are actions to execute when heartbeat fails
+	RecoveryActions []string `yaml:"recovery_actions"`
+}
+
 // DefaultAgentConfig returns the default agent configuration.
 func DefaultAgentConfig() *AgentConfig {
 	return &AgentConfig{
@@ -126,6 +158,23 @@ func DefaultAgentConfig() *AgentConfig {
 			Level:  "info",
 			Format: "json",
 			Output: "stdout",
+		},
+		ControlPlane: ControlPlaneSettings{
+			IPs:           []string{},
+			Domains:       []string{},
+			AlwaysAllowed: true,
+		},
+		Safety: SafetySettings{
+			DefaultTTL:                4 * time.Hour,
+			AutoRevertEnabled:         true,
+			StateFile:                 "/var/lib/aisac/state.json",
+			HeartbeatFailureThreshold: 5,
+			ActionTTLs: map[string]time.Duration{
+				"isolate_host": 4 * time.Hour,
+				"block_ip":     24 * time.Hour,
+				"disable_user": 8 * time.Hour,
+			},
+			RecoveryActions: []string{"unisolate_host"},
 		},
 	}
 }
@@ -245,4 +294,51 @@ func (c *AgentConfig) IsActionEnabled(action string) bool {
 		}
 	}
 	return false
+}
+
+// IsControlPlaneIP checks if an IP is in the control plane whitelist.
+func (c *AgentConfig) IsControlPlaneIP(ip string) bool {
+	if !c.ControlPlane.AlwaysAllowed {
+		return false
+	}
+	for _, allowedIP := range c.ControlPlane.IPs {
+		if allowedIP == ip {
+			return true
+		}
+	}
+	return false
+}
+
+// IsControlPlaneDomain checks if a domain is in the control plane whitelist.
+func (c *AgentConfig) IsControlPlaneDomain(domain string) bool {
+	if !c.ControlPlane.AlwaysAllowed {
+		return false
+	}
+	for _, allowedDomain := range c.ControlPlane.Domains {
+		if allowedDomain == domain {
+			return true
+		}
+	}
+	return false
+}
+
+// GetActionTTL returns the TTL for a specific action.
+func (c *AgentConfig) GetActionTTL(action string) time.Duration {
+	if ttl, ok := c.Safety.ActionTTLs[action]; ok {
+		return ttl
+	}
+	return c.Safety.DefaultTTL
+}
+
+// IsReversibleAction checks if an action has a reverse action.
+func IsReversibleAction(action string) (bool, string) {
+	reverseMap := map[string]string{
+		"isolate_host": "unisolate_host",
+		"block_ip":     "unblock_ip",
+		"disable_user": "enable_user",
+	}
+	if reverse, ok := reverseMap[action]; ok {
+		return true, reverse
+	}
+	return false, ""
 }
