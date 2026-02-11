@@ -1376,9 +1376,9 @@ cleanup_services() {
     fi
     systemctl disable aisac-server 2>/dev/null || true
 
-    # Kill any lingering processes
-    pkill -f "aisac-agent" 2>/dev/null || true
-    pkill -f "aisac-server" 2>/dev/null || true
+    # Kill any lingering processes (exact match only to avoid killing installer)
+    pkill -x "aisac-agent" 2>/dev/null || true
+    pkill -x "aisac-server" 2>/dev/null || true
 
     # Wait for processes to terminate
     sleep 2
