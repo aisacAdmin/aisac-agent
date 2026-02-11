@@ -234,6 +234,8 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 			Str("content_type", req.Header.Get("Content-Type")).
 			Str("content_encoding", req.Header.Get("Content-Encoding")).
 			Bool("has_api_key", o.cfg.APIKey != "").
+			Int("api_key_length", len(o.cfg.APIKey)).
+			Str("x_api_key_header", req.Header.Get("X-API-Key")).
 			Msg("Making HTTP request")
 	}
 
