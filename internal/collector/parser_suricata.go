@@ -32,6 +32,17 @@ func (p *SuricataEVEParser) Parse(line string) (*LogEvent, error) {
 		return nil, err
 	}
 
+	// Filter: Only process security-relevant events
+	// Skip telemetry events (flow, dns, http, tls, stats, etc.)
+	eventType, _ := eve["event_type"].(string)
+	switch eventType {
+	case "alert", "anomaly", "drop", "pkthdr":
+		// Security events - process these
+	default:
+		// Telemetry/stats - skip to reduce volume
+		return nil, nil
+	}
+
 	event := &LogEvent{
 		Timestamp: time.Now().UTC(),
 		Raw:       line,
