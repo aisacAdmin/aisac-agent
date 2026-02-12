@@ -42,6 +42,7 @@ var (
 	apiMTLS            bool
 	platformWebhookURL string
 	platformAPIKey     string
+	serverURL          string
 )
 
 // Server represents the command server.
@@ -54,6 +55,7 @@ type Server struct {
 	allowedOrigins     map[string]bool
 	platformWebhookURL string
 	platformAPIKey     string
+	serverURL          string
 	httpClient         *http.Client
 }
 
@@ -88,6 +90,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&apiMTLS, "api-mtls", true, "Require mTLS for API REST (disable for SOAR/n8n clients)")
 	rootCmd.Flags().StringVar(&platformWebhookURL, "platform-webhook", "", "AISAC platform webhook URL for agent registration notifications")
 	rootCmd.Flags().StringVar(&platformAPIKey, "platform-api-key", "", "AISAC platform API key for webhook authentication")
+	rootCmd.Flags().StringVar(&serverURL, "server-url", "", "Command Server public URL (e.g., https://IP:8443) for SOAR webhook notification")
 
 	rootCmd.SetVersionTemplate(`{{.Name}} {{.Version}}
 Commit: ` + commit + `
@@ -129,6 +132,7 @@ func run(cmd *cobra.Command, args []string) error {
 		allowedOrigins:     originsMap,
 		platformWebhookURL: platformWebhookURL,
 		platformAPIKey:     platformAPIKey,
+		serverURL:          serverURL,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
@@ -257,8 +261,16 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close() // Ensure connection is always closed
 
+	// Extract client IP from RemoteAddr (format: "IP:port")
+	clientIP := r.RemoteAddr
+	if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
+		clientIP = clientIP[:idx]
+	}
+	// Remove brackets from IPv6 addresses
+	clientIP = strings.Trim(clientIP, "[]")
+
 	agentID := r.Header.Get("X-Agent-ID")
-	s.logger.Info().Str("agent_id", agentID).Str("remote", r.RemoteAddr).Msg("Agent connected")
+	s.logger.Info().Str("agent_id", agentID).Str("remote", r.RemoteAddr).Str("client_ip", clientIP).Msg("Agent connected")
 
 	// Wait for registration
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -308,6 +320,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		LastSeen: time.Now(),
 		stopPing: make(chan struct{}),
 	}
+
+	// Populate IP from WebSocket connection (override whatever agent sent)
+	agent.Info.IP = clientIP
 
 	s.agentsMu.Lock()
 	s.agents[agent.ID] = agent
@@ -660,6 +675,7 @@ func (s *Server) notifyPlatform(agent *AgentConn) {
 		// This is sent once per agent connection over HTTPS with authentication
 		"command_server": map[string]interface{}{
 			"api_token": s.apiToken,
+			"url":       s.serverURL,
 			"version":   version,
 		},
 	}

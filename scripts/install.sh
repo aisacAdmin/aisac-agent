@@ -400,6 +400,7 @@ generate_api_token() {
 
 install_command_server() {
     local api_token="$1"
+    local server_url="$2"
     local webhook_url="${PLATFORM_WEBHOOK_URL:-}"
     local platform_key="${PLATFORM_API_KEY:-}"
 
@@ -437,6 +438,11 @@ install_command_server() {
     exec_cmd+="    --ca $CONFIG_DIR/certs/ca.crt \\\\\n"
     exec_cmd+="    --api-token \"${api_token}\" \\\\\n"
     exec_cmd+="    --api-mtls=false \\\\\n"
+
+    # Add server URL (critical for SOAR webhook notifications)
+    if [ -n "$server_url" ]; then
+        exec_cmd+="    --server-url \"${server_url}\" \\\\\n"
+    fi
 
     # Add webhook parameters if configured
     if [ -n "$webhook_url" ]; then
@@ -714,10 +720,20 @@ configure_agent() {
                 PLATFORM_WEBHOOK_URL=$(prompt "Platform webhook URL" "$DEFAULT_PLATFORM_WEBHOOK")
                 PLATFORM_API_KEY=$(prompt_password "Platform API key")
                 echo ""
+
+                # Prompt for public server URL (critical for SOAR)
+                echo -e "${BLUE}Public Server URL: Used by the platform to send commands back to agents.${NC}"
+                echo -e "${BLUE}This must be the publicly accessible URL (IP or domain) where this server listens.${NC}"
+                echo -e "${YELLOW}Example: https://148.230.125.219:8443${NC}"
+                echo ""
+                PUBLIC_SERVER_URL=$(prompt "Public Server URL" "https://$(hostname -I | awk '{print $1}'):8443")
+                echo ""
+
                 log_success "Platform webhook configured"
             else
                 PLATFORM_WEBHOOK_URL=""
                 PLATFORM_API_KEY=""
+                PUBLIC_SERVER_URL=""
             fi
             echo ""
         else
@@ -1580,7 +1596,7 @@ main() {
     # Install Command Server if requested
     if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
         echo ""
-        install_command_server "$SERVER_API_TOKEN"
+        install_command_server "$SERVER_API_TOKEN" "${PUBLIC_SERVER_URL:-}"
     fi
 
     generate_config
