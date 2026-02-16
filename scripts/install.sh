@@ -173,6 +173,11 @@ register_agent() {
     local cs_version="${7:-}"
 
     log_info "Registering agent with AISAC platform..."
+    if [ -n "$cs_api_token" ]; then
+        log_info "Including Command Server data (token: ${cs_api_token:0:16}..., url: ${cs_url})"
+    else
+        log_info "Registering without Command Server data (SOAR not configured)"
+    fi
 
     # Collect system information
     local hostname=$(hostname)
@@ -720,6 +725,16 @@ configure_agent() {
             echo ""
         else
             SERVER_URL=$(prompt "Command Server WebSocket URL" "$DEFAULT_SERVER_URL")
+
+            echo ""
+            echo -e "${BLUE}To enable SOAR commands from the platform, the CS API token and public URL are needed.${NC}"
+            echo -e "${BLUE}These are used during registration so the platform can reach the Command Server.${NC}"
+            echo ""
+
+            SERVER_API_TOKEN=$(prompt "Command Server API Token (Bearer token used by n8n)")
+            if [ -n "$SERVER_API_TOKEN" ]; then
+                PUBLIC_SERVER_URL=$(prompt "Public Command Server URL" "https://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'IP'):8443")
+            fi
         fi
 
         echo ""

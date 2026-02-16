@@ -1,6 +1,6 @@
 # AISAC Agent Command Server REST API Documentation
 
-**Version:** v1.0.0
+**Version:** v1.1.0
 **Base URL:** `https://command-server.aisac.local/api/v1`
 **Protocol:** HTTPS only
 
@@ -514,19 +514,35 @@ After sending a command, the agent will execute it and send a response back. The
 
 ## Available Actions
 
-The AISAC Agent supports the following security response actions:
+The AISAC Agent supports the following security actions:
+
+### Response Actions
 
 | Action | Description | Platforms |
 |--------|-------------|-----------|
-| `block_ip` | Block an IP address in the firewall | Linux, Windows, Firewall appliances |
-| `unblock_ip` | Remove IP block from firewall | Linux, Windows, Firewall appliances |
-| `isolate_host` | Isolate host from network | Linux, Windows |
-| `unisolate_host` | Restore network connectivity | Linux, Windows |
-| `disable_user` | Disable a user account | Linux, Windows, Active Directory |
-| `enable_user` | Re-enable a user account | Linux, Windows, Active Directory |
-| `kill_process` | Terminate a running process | Linux, Windows |
+| `block_ip` | Block an IP address in the firewall | Linux, Windows, macOS |
+| `unblock_ip` | Remove IP block from firewall | Linux, Windows, macOS |
+| `isolate_host` | Isolate host from network | Linux, Windows, macOS |
+| `unisolate_host` | Restore network connectivity | Linux, Windows, macOS |
+| `disable_user` | Disable a user account | Linux, Windows, macOS |
+| `enable_user` | Re-enable a user account | Linux, Windows, macOS |
+| `kill_process` | Terminate a running process | Linux, Windows, macOS |
+
+### Investigation Actions
+
+| Action | Description | Platforms |
+|--------|-------------|-----------|
+| `dns_lookup` | Perform DNS resolution lookup | All platforms |
+| `check_hash` | Check file hash reputation against threat intelligence | All platforms |
+| `check_ip_reputation` | Check IP address reputation against threat intelligence | All platforms |
+| `search_ioc` | Search for Indicators of Compromise on host | All platforms |
+
+### Forensics Actions
+
+| Action | Description | Platforms |
+|--------|-------------|-----------|
 | `collect_forensics` | Collect forensic evidence | All platforms |
-| `threat_hunt` | Search for indicators of compromise | All platforms |
+| `threat_hunt` | Search for threat indicators and suspicious activity | All platforms |
 
 ---
 
@@ -817,6 +833,217 @@ curl -X POST https://command-server.aisac.local/api/v1/agents/agent-windows-002/
     },
     "execution_id": "soar-exec-009"
   }'
+```
+
+---
+
+### dns_lookup
+
+Perform DNS resolution lookup for a hostname.
+
+**Parameters:**
+
+```json
+{
+  "hostname": "suspicious-domain.com",
+  "record_type": "A"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `hostname` | string | Yes | Hostname to resolve |
+| `record_type` | string | No | DNS record type: `A`, `AAAA`, `MX`, `TXT`, `CNAME`, `NS` (default: `A`) |
+
+**Example:**
+
+```bash
+curl -X POST https://command-server.aisac.local/api/v1/agents/agent-linux-001/command \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "dns_lookup",
+    "parameters": {
+      "hostname": "suspicious-c2-domain.com",
+      "record_type": "A"
+    },
+    "execution_id": "soar-exec-013"
+  }'
+```
+
+**Response Result:**
+
+```json
+{
+  "hostname": "suspicious-c2-domain.com",
+  "record_type": "A",
+  "records": ["203.0.113.42", "203.0.113.43"],
+  "ttl": 300
+}
+```
+
+---
+
+### check_hash
+
+Check file hash reputation against threat intelligence services.
+
+**Parameters:**
+
+```json
+{
+  "hash": "44d88612fea8a8f36de82e1278abb02f",
+  "hash_type": "md5"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `hash` | string | Yes | File hash to check |
+| `hash_type` | string | No | Hash type: `md5`, `sha1`, `sha256` (default: auto-detect) |
+
+**Example:**
+
+```bash
+curl -X POST https://command-server.aisac.local/api/v1/agents/agent-linux-001/command \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "check_hash",
+    "parameters": {
+      "hash": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+      "hash_type": "sha256"
+    },
+    "execution_id": "soar-exec-014"
+  }'
+```
+
+**Response Result:**
+
+```json
+{
+  "hash": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+  "hash_type": "sha256",
+  "verdict": "malicious",
+  "score": 85,
+  "detections": 45,
+  "total_engines": 70,
+  "tags": ["trojan", "ransomware"],
+  "first_seen": "2024-06-15T00:00:00Z",
+  "last_seen": "2025-12-04T10:00:00Z"
+}
+```
+
+---
+
+### check_ip_reputation
+
+Check IP address reputation against threat intelligence services.
+
+**Parameters:**
+
+```json
+{
+  "ip_address": "203.0.113.42"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ip_address` | string | Yes | IP address to check (IPv4 or IPv6) |
+
+**Example:**
+
+```bash
+curl -X POST https://command-server.aisac.local/api/v1/agents/agent-linux-001/command \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "check_ip_reputation",
+    "parameters": {
+      "ip_address": "203.0.113.42"
+    },
+    "execution_id": "soar-exec-015"
+  }'
+```
+
+**Response Result:**
+
+```json
+{
+  "ip_address": "203.0.113.42",
+  "verdict": "suspicious",
+  "score": 65,
+  "categories": ["scanner", "proxy"],
+  "country": "CN",
+  "asn": "AS12345",
+  "asn_name": "Example ISP",
+  "reports": 12,
+  "last_reported": "2025-12-03T15:30:00Z"
+}
+```
+
+---
+
+### search_ioc
+
+Search for Indicators of Compromise on the host filesystem and logs.
+
+**Parameters:**
+
+```json
+{
+  "ioc_type": "hash",
+  "ioc_value": "44d88612fea8a8f36de82e1278abb02f",
+  "search_paths": ["/var/log", "/tmp", "/home"]
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ioc_type` | string | Yes | IOC type: `hash`, `filename`, `ip`, `domain`, `string` |
+| `ioc_value` | string | Yes | IOC value to search for |
+| `search_paths` | array | No | Paths to search (default: system-wide) |
+| `recursive` | boolean | No | Recursive search (default: `true`) |
+| `max_depth` | integer | No | Maximum directory depth (default: 10) |
+
+**Example:**
+
+```bash
+curl -X POST https://command-server.aisac.local/api/v1/agents/agent-linux-001/command \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "search_ioc",
+    "parameters": {
+      "ioc_type": "hash",
+      "ioc_value": "44d88612fea8a8f36de82e1278abb02f",
+      "search_paths": ["/home", "/tmp", "/var/www"],
+      "recursive": true
+    },
+    "execution_id": "soar-exec-016",
+    "timeout_seconds": 300
+  }'
+```
+
+**Response Result:**
+
+```json
+{
+  "ioc_type": "hash",
+  "ioc_value": "44d88612fea8a8f36de82e1278abb02f",
+  "found": true,
+  "matches": [
+    {
+      "path": "/tmp/suspicious_file.exe",
+      "size": 1234567,
+      "modified": "2025-12-04T08:30:00Z",
+      "owner": "www-data"
+    }
+  ],
+  "files_scanned": 15234,
+  "scan_duration_ms": 45000
+}
 ```
 
 ---
@@ -1130,7 +1357,8 @@ send_command "agent-linux-001" "block_ip" '{
 The API uses URL-based versioning: `/api/v1/...`
 
 **Version History:**
-- **v1.0.0** (Current): Initial release with core endpoints
+- **v1.1.0** (Current): Added investigation actions (dns_lookup, check_hash, check_ip_reputation, search_ioc)
+- **v1.0.0**: Initial release with core response and forensics actions
 
 **Deprecation Policy:**
 - API versions are supported for minimum 12 months after deprecation notice
@@ -1148,6 +1376,6 @@ The API uses URL-based versioning: `/api/v1/...`
 
 ---
 
-**Generated:** 2025-12-04
-**Version:** 1.0.0
+**Generated:** 2026-02-12
+**Version:** 1.1.0
 **License:** Proprietary

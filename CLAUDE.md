@@ -72,7 +72,7 @@ aisac-agent/
 │   ├── collector/          # SIEM log collector
 │   │   ├── collector.go    # Main collector component
 │   │   ├── tailer.go       # File tailer with rotation detection
-│   │   ├── parser*.go      # Log parsers (JSON, syslog, Suricata)
+│   │   ├── parser*.go      # Log parsers (JSON, syslog, Suricata, Wazuh)
 │   │   ├── output*.go      # Output destinations (HTTP)
 │   │   ├── batcher.go      # Event batching
 │   │   └── sincedb.go      # Position tracking
@@ -180,23 +180,44 @@ collector:
 
 ## Implemented Actions
 
+### Response Actions
+
 | Action | Description | Platforms |
 |--------|-------------|-----------|
-| `block_ip` | Block IP in firewall | iptables, nftables, Windows Firewall, pfSense |
-| `unblock_ip` | Unblock IP from firewall | iptables, nftables, Windows Firewall, pfSense |
+| `block_ip` | Block IP in firewall | iptables, nftables, Windows Firewall, pf |
+| `unblock_ip` | Unblock IP from firewall | iptables, nftables, Windows Firewall, pf |
 | `isolate_host` | Isolate host from network | Linux, Windows, macOS |
 | `unisolate_host` | Restore network connectivity | Linux, Windows, macOS |
-| `disable_user` | Disable user account | Linux (usermod), Windows/AD (PowerShell) |
-| `enable_user` | Enable user account | Linux, Windows |
+| `disable_user` | Disable user account | Linux (usermod), Windows/AD (PowerShell), macOS (dscl) |
+| `enable_user` | Enable user account | Linux, Windows, macOS |
 | `kill_process` | Terminate process | Linux, Windows, macOS |
+
+### Investigation Actions
+
+| Action | Description | Platforms |
+|--------|-------------|-----------|
+| `dns_lookup` | Perform DNS resolution lookup | All |
+| `check_hash` | Check file hash reputation (VirusTotal, etc.) | All |
+| `check_ip_reputation` | Check IP reputation against threat intelligence | All |
+| `search_ioc` | Search for Indicators of Compromise on host | All |
+
+### Forensics Actions
+
+| Action | Description | Platforms |
+|--------|-------------|-----------|
+| `collect_forensics` | Collect forensic evidence (memory, disk artifacts) | All |
+| `threat_hunt` | Search for threat indicators and suspicious activity | All |
 
 ## Collector Parsers
 
 | Parser | Description |
 |--------|-------------|
-| `suricata_eve` | Suricata EVE JSON format |
+| `suricata_eve` | Suricata EVE JSON format (filters telemetry, keeps security events) |
+| `wazuh` | Wazuh HIDS alerts JSON format |
 | `syslog` | RFC3164/RFC5424 syslog |
 | `json` | Generic JSON logs |
+
+**Note**: The Suricata parser filters out telemetry events (flow, netflow, stats, etc.) and only processes security-relevant events (alert, anomaly, drop, pkthdr).
 
 ## Security Model
 
