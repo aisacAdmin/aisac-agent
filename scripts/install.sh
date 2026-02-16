@@ -235,6 +235,15 @@ CSEOF
 EOF
 )
 
+    # Debug: show payload being sent (redact token)
+    local debug_payload="$payload"
+    if [ -n "$cs_api_token" ]; then
+        debug_payload=$(echo "$payload" | sed "s/${cs_api_token}/${cs_api_token:0:8}...REDACTED/g")
+    fi
+    log_info "Registration URL: ${register_url}"
+    log_info "Registration payload:"
+    echo "$debug_payload"
+
     # Make registration request
     local response=""
     local http_code=""
@@ -260,6 +269,9 @@ EOF
         log_warning "Neither curl nor wget found. Skipping registration."
         return 1
     fi
+
+    # Debug: show response
+    log_info "Registration response (HTTP ${http_code}): ${response}"
 
     # Check response
     case "$http_code" in
@@ -787,10 +799,13 @@ configure_agent() {
     echo ""
 
     if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
+        log_info "DEBUG registration decision: SERVER_API_TOKEN='${SERVER_API_TOKEN:0:8}...' PUBLIC_SERVER_URL='${PUBLIC_SERVER_URL}'"
         if [ -n "$SERVER_API_TOKEN" ] && [ -n "$PUBLIC_SERVER_URL" ]; then
+            log_info "Registering WITH command_server data"
             register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$DEFAULT_REGISTER_URL" \
                 "$SERVER_API_TOKEN" "$PUBLIC_SERVER_URL" "1.0.1"
         else
+            log_info "Registering WITHOUT command_server data (SERVER_API_TOKEN empty='$([ -z "$SERVER_API_TOKEN" ] && echo yes || echo no)', PUBLIC_SERVER_URL empty='$([ -z "$PUBLIC_SERVER_URL" ] && echo yes || echo no)')"
             register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
         fi
     else
