@@ -32,31 +32,24 @@ var (
 )
 
 var (
-	listenAddr         string
-	certFile           string
-	keyFile            string
-	caFile             string
-	logLevel           string
-	apiToken           string
-	allowedOrigins     string
-	apiMTLS            bool
-	platformWebhookURL string
-	platformAPIKey     string
-	serverURL          string
+	listenAddr     string
+	certFile       string
+	keyFile        string
+	caFile         string
+	logLevel       string
+	apiToken       string
+	allowedOrigins string
+	apiMTLS        bool
 )
 
 // Server represents the command server.
 type Server struct {
-	logger             zerolog.Logger
-	upgrader           websocket.Upgrader
-	agents             map[string]*AgentConn
-	agentsMu           sync.RWMutex
-	apiToken           string
-	allowedOrigins     map[string]bool
-	platformWebhookURL string
-	platformAPIKey     string
-	serverURL          string
-	httpClient         *http.Client
+	logger         zerolog.Logger
+	upgrader       websocket.Upgrader
+	agents         map[string]*AgentConn
+	agentsMu       sync.RWMutex
+	apiToken       string
+	allowedOrigins map[string]bool
 }
 
 // AgentConn represents a connected agent.
@@ -88,9 +81,6 @@ func main() {
 	rootCmd.Flags().StringVar(&apiToken, "api-token", "", "API bearer token for REST API authentication (required)")
 	rootCmd.Flags().StringVar(&allowedOrigins, "allowed-origins", "", "Comma-separated list of allowed WebSocket origins")
 	rootCmd.Flags().BoolVar(&apiMTLS, "api-mtls", true, "Require mTLS for API REST (disable for SOAR/n8n clients)")
-	rootCmd.Flags().StringVar(&platformWebhookURL, "platform-webhook", "", "AISAC platform webhook URL for agent registration notifications")
-	rootCmd.Flags().StringVar(&platformAPIKey, "platform-api-key", "", "AISAC platform API key for webhook authentication")
-	rootCmd.Flags().StringVar(&serverURL, "server-url", "", "Command Server public URL (e.g., https://IP:8443) for SOAR webhook notification")
 
 	rootCmd.SetVersionTemplate(`{{.Name}} {{.Version}}
 Commit: ` + commit + `
@@ -117,30 +107,11 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Log platform webhook configuration (if enabled)
-	if platformWebhookURL != "" {
-		logger.Info().
-			Str("webhook_url", platformWebhookURL).
-			Bool("has_api_key", platformAPIKey != "").
-			Msg("Platform webhook notifications enabled")
-	}
-
 	server := &Server{
-		logger:             logger,
-		agents:             make(map[string]*AgentConn),
-		apiToken:           apiToken,
-		allowedOrigins:     originsMap,
-		platformWebhookURL: platformWebhookURL,
-		platformAPIKey:     platformAPIKey,
-		serverURL:          serverURL,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-				},
-			},
-		},
+		logger:         logger,
+		agents:         make(map[string]*AgentConn),
+		apiToken:       apiToken,
+		allowedOrigins: originsMap,
 	}
 
 	// Configure WebSocket upgrader with origin checking
@@ -333,11 +304,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Str("hostname", agent.Info.Hostname).
 		Str("platform", string(agent.Info.Platform)).
 		Msg("Agent registered")
-
-	// Notify platform about new agent connection (if configured)
-	if s.platformWebhookURL != "" {
-		go s.notifyPlatform(agent)
-	}
 
 	// Start ping loop to keep connection alive
 	go s.startPingLoop(agent)
@@ -648,96 +614,6 @@ func (s *Server) apiAuthMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// notifyPlatform sends a webhook to the AISAC platform when an agent connects.
-// This allows the platform to register the agent and store the Command Server API token
-// for future SOAR operations.
-func (s *Server) notifyPlatform(agent *AgentConn) {
-	if s.platformWebhookURL == "" {
-		return
-	}
-
-	// Prepare webhook payload
-	payload := map[string]interface{}{
-		"event":      "agent_connected",
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
-		"agent_id":   agent.ID,
-		"agent_info": map[string]interface{}{
-			"hostname": agent.Info.Hostname,
-			"platform": agent.Info.Platform,
-			"version":  agent.Info.Version,
-			"ip":       agent.Info.IP,
-			"status":   agent.Info.Status,
-			"labels":   agent.Info.Labels,
-		},
-		// SECURITY: Send Command Server API token so platform can store it
-		// This is sent once per agent connection over HTTPS with authentication
-		"command_server": map[string]interface{}{
-			"api_token": s.apiToken,
-			"url":       s.serverURL,
-			"version":   version,
-		},
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Failed to marshal webhook payload")
-		return
-	}
-
-	// Create HTTP request
-	req, err := http.NewRequest("POST", s.platformWebhookURL, strings.NewReader(string(payloadBytes)))
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Failed to create webhook request")
-		return
-	}
-
-	// Set headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "AISAC-Command-Server/"+version)
-
-	// SECURITY: Authenticate with platform using API key
-	if s.platformAPIKey != "" {
-		req.Header.Set("X-API-Key", s.platformAPIKey)
-	}
-
-	// Send request with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req = req.WithContext(ctx)
-
-	s.logger.Info().
-		Str("agent_id", agent.ID).
-		Str("webhook_url", s.platformWebhookURL).
-		Msg("Sending agent registration webhook to platform")
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		s.logger.Error().
-			Err(err).
-			Str("agent_id", agent.ID).
-			Msg("Failed to send webhook to platform")
-		return
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body := make([]byte, 512)
-		resp.Body.Read(body)
-		s.logger.Error().
-			Int("status_code", resp.StatusCode).
-			Str("response", string(body)).
-			Str("agent_id", agent.ID).
-			Msg("Platform webhook failed")
-		return
-	}
-
-	s.logger.Info().
-		Str("agent_id", agent.ID).
-		Int("status_code", resp.StatusCode).
-		Msg("Platform notified successfully")
 }
 
 func setupLogger(level string) zerolog.Logger {

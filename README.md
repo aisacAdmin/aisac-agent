@@ -174,10 +174,12 @@ collector:
 │  │   Heartbeat  │  │   Collector   │  │        Executor           │ │
 │  │   (Status)   │  │    (SIEM)     │  │        (SOAR)             │ │
 │  │              │  │               │  │                           │ │
-│  │ • CPU/Mem    │  │ • Suricata    │  │ • block_ip                │ │
-│  │ • Disk       │  │ • Syslog      │  │ • isolate_host            │ │
-│  │ • Uptime     │  │ • JSON logs   │  │ • disable_user            │ │
-│  │              │  │ • Batching    │  │ • kill_process            │ │
+│  │ • CPU/Mem    │  │ • Suricata    │  │ • Response:               │ │
+│  │ • Disk       │  │ • Wazuh       │  │   block_ip, isolate_host  │ │
+│  │ • Uptime     │  │ • Syslog      │  │ • Investigation:          │ │
+│  │              │  │ • JSON logs   │  │   dns_lookup, check_hash  │ │
+│  │              │  │ • Batching    │  │ • Forensics:              │ │
+│  │              │  │               │  │   collect_forensics       │ │
 │  └──────────────┘  └───────────────┘  └───────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -199,13 +201,18 @@ collector:
 - **Real-time WebSocket Communication**: Persistent connections with automatic reconnection
 - **Mutual TLS Authentication**: Secure agent-server authentication using mTLS
 - **Action Framework**: Extensible system for implementing security actions
+  - **Response Actions**: Block IP, isolate host, disable user, kill process
+  - **Investigation Actions**: DNS lookup, hash reputation, IP reputation, IOC search
+  - **Forensics Actions**: Collect forensic evidence, threat hunting
 - **Rate Limiting**: Per-action rate limits to prevent accidental overload
 - **Input Validation**: Strict validation of IP addresses, usernames, process names
 - **Protected Resources**: Prevents actions on system-critical accounts and processes
 - **SOAR Callbacks**: Optional webhook callbacks to external systems (n8n, SOAR platforms)
+- **Platform Webhook**: Automatic agent registration when connecting to Command Server
 
 ### SIEM Collection
-- **Multi-source Log Collection**: Suricata EVE, syslog, generic JSON files
+- **Multi-source Log Collection**: Suricata EVE, Wazuh alerts, syslog, generic JSON files
+- **Smart Event Filtering**: Suricata parser filters telemetry, keeps security-relevant events
 - **Efficient Batching**: Configurable batch size and flush intervals
 - **Resume Support**: Sincedb tracking for position persistence across restarts
 - **File Rotation Detection**: Automatically handles log rotation
@@ -227,6 +234,8 @@ collector:
 
 ## Supported Actions
 
+### Response Actions
+
 | Action | Description | Platforms | Status |
 |--------|-------------|-----------|--------|
 | `block_ip` | Block IP address in firewall | Linux (iptables/nftables), Windows Firewall, macOS (pf) | ✅ Stable |
@@ -236,8 +245,22 @@ collector:
 | `disable_user` | Disable user account | Linux (usermod), Windows (net user/AD), macOS (dscl) | ✅ Stable |
 | `enable_user` | Re-enable user account | Linux (usermod), Windows (net user/AD), macOS (dscl) | ✅ Stable |
 | `kill_process` | Terminate process by name or PID | Linux, Windows, macOS | ✅ Stable |
-| `collect_forensics` | Collect forensic evidence | All | 🚧 Planned |
-| `threat_hunt` | Search for IOCs (Indicators of Compromise) | All | 🚧 Planned |
+
+### Investigation Actions
+
+| Action | Description | Platforms | Status |
+|--------|-------------|-----------|--------|
+| `dns_lookup` | Perform DNS resolution lookup | All | ✅ Stable |
+| `check_hash` | Check file hash reputation (VirusTotal, etc.) | All | ✅ Stable |
+| `check_ip_reputation` | Check IP reputation against threat intelligence | All | ✅ Stable |
+| `search_ioc` | Search for Indicators of Compromise on host | All | ✅ Stable |
+
+### Forensics Actions
+
+| Action | Description | Platforms | Status |
+|--------|-------------|-----------|--------|
+| `collect_forensics` | Collect forensic evidence (memory, disk artifacts) | All | ✅ Stable |
+| `threat_hunt` | Search for threat indicators and suspicious activity | All | ✅ Stable |
 
 ### Action Examples
 
@@ -271,6 +294,61 @@ collector:
   "parameters": {
     "process_name": "malware.exe",
     "force": true
+  }
+}
+```
+
+#### DNS Lookup
+```json
+{
+  "action": "dns_lookup",
+  "parameters": {
+    "hostname": "suspicious-domain.com",
+    "record_type": "A"
+  }
+}
+```
+
+#### Check Hash Reputation
+```json
+{
+  "action": "check_hash",
+  "parameters": {
+    "hash": "44d88612fea8a8f36de82e1278abb02f",
+    "hash_type": "md5"
+  }
+}
+```
+
+#### Check IP Reputation
+```json
+{
+  "action": "check_ip_reputation",
+  "parameters": {
+    "ip_address": "203.0.113.42"
+  }
+}
+```
+
+#### Search IOC
+```json
+{
+  "action": "search_ioc",
+  "parameters": {
+    "ioc_type": "hash",
+    "ioc_value": "44d88612fea8a8f36de82e1278abb02f",
+    "search_paths": ["/var/log", "/tmp"]
+  }
+}
+```
+
+#### Collect Forensics
+```json
+{
+  "action": "collect_forensics",
+  "parameters": {
+    "artifact_types": ["processes", "connections", "files"],
+    "output_path": "/tmp/forensics"
   }
 }
 ```
@@ -370,6 +448,23 @@ This generates:
   --api-token YOUR_SECURE_TOKEN_HERE \
   --log-level info
 ```
+
+**Server Flags:**
+| Flag | Description |
+|------|-------------|
+| `--listen` | Address and port to listen on (default: `:8443`) |
+| `--cert` | Path to server certificate |
+| `--key` | Path to server private key |
+| `--ca` | Path to CA certificate for client verification |
+| `--api-token` | Bearer token for REST API authentication |
+| `--api-mtls` | Require mTLS for REST API (default: true, disable for n8n) |
+| `--log-level` | Logging level: debug, info, warn, error |
+
+#### Agent Registration with Command Server Data
+
+The installer registers the agent with the platform via `POST /v1/register`, including Command Server connection details when SOAR is enabled. This allows the platform to store the CS API token for SOAR workflows — using a single per-asset API key instead of requiring a separate `PLATFORM_API_KEY`.
+
+See [docs/platform-webhook.md](docs/platform-webhook.md) for detailed registration documentation.
 
 ### Run the Agent
 
@@ -537,9 +632,12 @@ collector:
 **Supported Parsers**:
 | Parser | Description |
 |--------|-------------|
-| `suricata_eve` | Suricata EVE JSON format |
+| `suricata_eve` | Suricata EVE JSON format (filters telemetry, keeps security events) |
 | `syslog` | RFC3164/RFC5424 syslog |
 | `json` | Generic JSON logs |
+| `wazuh` | Wazuh HIDS alerts JSON format |
+
+**Note**: The Suricata parser automatically filters out telemetry events (flow, netflow, stats, dns, http, tls, etc.) and only processes security-relevant events (alert, anomaly, drop, pkthdr) to reduce volume and prevent event channel saturation.
 
 ### SOAR Configuration
 
@@ -568,6 +666,7 @@ tls:
 actions:
   # Only these actions will be executed
   enabled:
+    # Response actions
     - block_ip
     - unblock_ip
     - isolate_host
@@ -575,6 +674,14 @@ actions:
     - disable_user
     - enable_user
     - kill_process
+    # Investigation actions
+    - dns_lookup
+    - check_hash
+    - check_ip_reputation
+    - search_ioc
+    # Forensics actions
+    - collect_forensics
+    - threat_hunt
 
   # Rate limits per action (prevent abuse)
   rate_limits:
@@ -1119,7 +1226,7 @@ docker run -d \
 - [x] Structured logging (zerolog)
 - [x] Cross-platform build
 
-### v1.0.1 (Current) ✅
+### v1.0.1 ✅
 - [x] mTLS authentication
 - [x] REST API with Bearer token auth
 - [x] Unblock/unisolate/enable actions
@@ -1129,9 +1236,16 @@ docker run -d \
 - [x] Linux installer script (`curl | bash`)
 - [x] `server.enabled` flag for certificate-free deployments
 
+### v1.1.0 (Current) ✅
+- [x] Investigation actions: `dns_lookup`, `check_hash`, `check_ip_reputation`, `search_ioc`
+- [x] Forensics actions: `collect_forensics`, `threat_hunt`
+- [x] Wazuh log parser support
+- [x] Suricata event type filtering (security events only)
+- [x] Platform webhook for automatic agent registration
+- [x] Command server URL population for SOAR dispatch
+- [x] Enhanced debug logging for troubleshooting
+
 ### v1.2.0 (Planned) 🚧
-- [ ] Action: `collect_forensics` (memory dump, disk artifacts)
-- [ ] Action: `threat_hunt` (IOC search)
 - [ ] Prometheus metrics endpoint
 - [ ] Agent auto-update mechanism
 - [ ] Windows installer (MSI)
@@ -1139,7 +1253,6 @@ docker run -d \
 
 ### v1.3.0 (Future)
 - [ ] OpenSearch output for collector
-- [ ] Wazuh agent integration
 - [ ] EDR integration (CrowdStrike, SentinelOne)
 - [ ] Custom action plugins
 - [ ] Agent grouping and bulk operations

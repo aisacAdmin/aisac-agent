@@ -1,131 +1,103 @@
-# Platform Webhook - Agent Registration
+# Agent Registration with Command Server Data
 
-When an agent connects to the Command Server, the server can automatically notify the AISAC platform via webhook. This allows the platform to:
+When an agent is installed, the installer registers it with the AISAC platform via `POST /v1/register`. If SOAR mode is enabled, the registration payload includes the Command Server connection details, allowing the platform to:
 
 1. **Register the agent** in the asset inventory
-2. **Store the Command Server API token** for future SOAR operations
-3. **Enable automated incident response workflows** without manual configuration
+2. **Store the Command Server API token** (encrypted) for future SOAR operations
+3. **Enable automated incident response workflows** without additional configuration
 
 ## Security Model
 
-- Webhook sent **once per agent connection** over **HTTPS**
-- Authenticated with **X-API-Key header** (platform API key)
-- API token transmitted **securely** to the platform
-- Platform stores token **encrypted** and associates it with the agent
+- Single API key per asset (`aisac_xxx`) — scoped to one asset only
+- Command Server token transmitted **once during registration** over **HTTPS**
+- Platform stores token **encrypted at rest**
+- `PLATFORM_API_KEY` is **no longer exposed to clients** — only used internally by N8N/services
+- The `agent-webhook` endpoint remains available for internal use only
 
-## Configuration
-
-### Command Server
-
-Configure webhook during installation or add flags to systemd service:
-
-```bash
-aisac-server \
-  --listen :8443 \
-  --cert /etc/aisac/certs/server.crt \
-  --key /etc/aisac/certs/server.key \
-  --ca /etc/aisac/certs/ca.crt \
-  --api-token "your-api-token" \
-  --platform-webhook "https://api.aisac.cisec.es/v1/webhooks/agent-connected" \
-  --platform-api-key "your-platform-api-key"
-```
-
-### Installer
-
-The installer will prompt for webhook configuration when installing the Command Server:
+## Registration Flow
 
 ```
-Enable platform webhook notifications? [y/n]: y
-Platform webhook URL [https://api.aisac.cisec.es/v1/webhooks/agent-connected]:
-Platform API key: ********
+Installation (single key: aisac_xxx):
+  1. Installer generates Agent ID + Command Server API token
+  2. POST /v1/register with per-asset API key
+     Body: {
+       agent_id, asset_id, hostname, os, version,
+       command_server: {            (optional, only if SOAR enabled)
+         api_token: "token-local",
+         url: "https://IP:8443",
+         version: "1.0.1"
+       }
+     }
+  3. Platform validates the per-asset API key
+  4. If command_server present → encrypts token and stores it
+  5. Agent + Command Server start normally
 ```
 
-## Webhook Payload
-
-When an agent connects, the Command Server sends this payload:
+## Registration Payload
 
 ```json
 {
-  "event": "agent_connected",
-  "timestamp": "2024-12-04T12:34:56Z",
-  "agent_id": "agent-uuid-here",
-  "agent_info": {
-    "hostname": "prod-web-01",
-    "platform": "linux",
-    "version": "1.0.3",
-    "ip": "192.168.1.100",
-    "status": "connected",
-    "labels": ["production", "webserver"]
-  },
+  "agent_id": "agent-hostname-abc123",
+  "asset_id": "63164623-15fb-4d7f-8655-f79f4338f768",
+  "hostname": "prod-web-01",
+  "os": "debian",
+  "os_version": "12",
+  "arch": "x86_64",
+  "kernel": "6.1.0-18-amd64",
+  "ip_address": "192.168.1.100",
+  "version": "1.0.1",
+  "capabilities": ["collector", "soar", "heartbeat"],
   "command_server": {
     "api_token": "aisac_server_xxx_your_token_here",
-    "version": "1.0.3"
+    "url": "https://148.230.125.219:8443",
+    "version": "1.0.1"
   }
 }
 ```
 
 ### Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `event` | string | Always "agent_connected" |
-| `timestamp` | string | ISO8601 timestamp (UTC) |
-| `agent_id` | string | Unique agent identifier |
-| `agent_info.hostname` | string | Agent hostname |
-| `agent_info.platform` | string | OS platform (linux/windows/darwin) |
-| `agent_info.version` | string | Agent version |
-| `agent_info.ip` | string | Agent IP address |
-| `agent_info.status` | string | Connection status |
-| `agent_info.labels` | array | Custom labels |
-| `command_server.api_token` | string | **Command Server API token** for SOAR |
-| `command_server.version` | string | Command Server version |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agent_id` | string | yes | Unique agent identifier |
+| `asset_id` | string | yes | Asset UUID from platform |
+| `hostname` | string | yes | Agent hostname |
+| `os` | string | yes | OS identifier (debian, ubuntu, etc.) |
+| `os_version` | string | yes | OS version |
+| `arch` | string | yes | CPU architecture |
+| `kernel` | string | no | Kernel version |
+| `ip_address` | string | no | Primary IP address |
+| `version` | string | yes | Agent version |
+| `capabilities` | array | yes | Enabled features |
+| `command_server` | object | no | Command Server data (only if SOAR enabled) |
+| `command_server.api_token` | string | yes* | CS API token for SOAR operations |
+| `command_server.url` | string | yes* | CS public URL |
+| `command_server.version` | string | no | CS version |
+
+*Required only when `command_server` object is present.
+
+### Response
+
+```json
+{
+  "success": true,
+  "agent_id": "agent-hostname-abc123",
+  "message": "Agent registered successfully",
+  "command_server_registered": true
+}
+```
 
 ## Platform Integration
 
-### Webhook Endpoint
+### Edge Function (agent-register)
 
-The platform should implement a webhook endpoint that:
+The platform `agent-register` edge function should:
 
-1. **Validates the API key** (`X-API-Key` header)
-2. **Verifies the payload** (JSON schema validation)
-3. **Stores the agent information** in the asset database
-4. **Saves the API token** (encrypted) associated with the agent
-5. **Returns 200 OK** on success
-
-### Example Implementation (Node.js/Express)
-
-```javascript
-app.post('/v1/webhooks/agent-connected', async (req, res) => {
-  // Validate API key
-  const apiKey = req.headers['x-api-key'];
-  if (!isValidPlatformKey(apiKey)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  // Parse payload
-  const { agent_id, agent_info, command_server } = req.body;
-
-  // Store agent in database
-  await db.agents.upsert({
-    id: agent_id,
-    hostname: agent_info.hostname,
-    platform: agent_info.platform,
-    version: agent_info.version,
-    ip: agent_info.ip,
-    status: 'connected',
-    labels: agent_info.labels,
-    last_seen: new Date(),
-    // Store API token encrypted
-    command_server_token: encrypt(command_server.api_token),
-    command_server_version: command_server.version,
-  });
-
-  // Trigger asset monitoring workflows
-  await triggerAssetMonitoring(agent_id);
-
-  res.json({ success: true });
-});
-```
+1. **Validate the per-asset API key** (`X-API-Key` header)
+2. **Verify asset_id matches the API key** (prevent cross-asset writes)
+3. **Store agent information** in the asset database
+4. **If `command_server` present** → encrypt token and store it
+5. **Return success response**
 
 ### SOAR Workflow Usage
 
@@ -137,14 +109,11 @@ When the platform needs to execute a SOAR action:
 4. **Send command** to agent
 
 ```javascript
-// Example: Block IP via SOAR
 async function blockIP(agentId, ipAddress) {
-  // Get agent and token
   const agent = await db.agents.findById(agentId);
   const apiToken = decrypt(agent.command_server_token);
 
-  // Call Command Server
-  const response = await fetch(`https://server:8443/api/v1/agents/${agentId}/command`, {
+  const response = await fetch(`${agent.command_server_url}/api/v1/agents/${agentId}/command`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiToken}`,
@@ -162,69 +131,34 @@ async function blockIP(agentId, ipAddress) {
 
 ## Security Considerations
 
-1. **HTTPS Only**: Webhook must use HTTPS to protect the API token in transit
-2. **API Key Authentication**: Platform API key must be kept secure
-3. **Token Encryption**: Platform must encrypt stored API tokens at rest
-4. **Rate Limiting**: Platform should rate-limit webhook endpoint
-5. **Webhook Validation**: Verify webhook signature if needed
-6. **Audit Logging**: Log all webhook receipts and API token usage
+1. **Per-asset key scope**: Each API key can only modify its own asset data
+2. **HTTPS only**: Registration uses HTTPS to protect the token in transit
+3. **Token encryption**: Platform must encrypt stored API tokens at rest
+4. **Rate limiting**: Platform should rate-limit the register endpoint
+5. **No PLATFORM_API_KEY on clients**: Only internal services use the platform key
 
-## Troubleshooting
+## Migration from Webhook Model
 
-### Webhook not being sent
+| Before | After |
+|--------|-------|
+| Agent calls `/v1/register` (per-asset key) | Same |
+| CS calls `/v1/webhooks/agent-connected` (PLATFORM_API_KEY) | Agent includes CS data in `/v1/register` |
+| Client needs 2 keys | Client needs 1 key |
+| PLATFORM_API_KEY exposed to clients | PLATFORM_API_KEY only internal |
+| `--platform-webhook` and `--platform-api-key` flags | Removed from Command Server |
 
-Check Command Server logs:
+## Non-Interactive Installation
+
 ```bash
-journalctl -u aisac-server -f
+AISAC_API_KEY=aisac_xxx \
+AISAC_ASSET_ID=uuid-here \
+AISAC_SOAR=true \
+AISAC_CS_TOKEN=your-cs-token \
+AISAC_CS_URL=https://IP:8443 \
+AISAC_NONINTERACTIVE=true \
+sudo bash install.sh
 ```
 
-Look for:
-```
-Platform webhook notifications enabled
-Sending agent registration webhook to platform
-```
+## Internal Webhook (agent-webhook)
 
-### Platform returns error
-
-Check webhook URL and API key configuration:
-```bash
-cat /etc/aisac-server/server-api-token
-```
-
-Verify systemd service parameters:
-```bash
-systemctl cat aisac-server
-```
-
-### Testing webhook manually
-
-Send test webhook:
-```bash
-curl -X POST https://api.aisac.cisec.es/v1/webhooks/agent-connected \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-platform-key" \
-  -d '{
-    "event": "agent_connected",
-    "timestamp": "2024-12-04T12:34:56Z",
-    "agent_id": "test-agent",
-    "agent_info": {
-      "hostname": "test-host",
-      "platform": "linux",
-      "version": "1.0.0",
-      "ip": "192.168.1.1"
-    },
-    "command_server": {
-      "api_token": "test_token_123",
-      "version": "1.0.0"
-    }
-  }'
-```
-
-## Benefits
-
-✅ **Zero Manual Configuration**: No need to manually configure API tokens in n8n
-✅ **Automatic Registration**: Agents automatically registered in platform
-✅ **Secure Token Storage**: API tokens stored encrypted in platform
-✅ **Scalable**: Supports multiple Command Servers and agents
-✅ **Audit Trail**: Platform logs all agent connections
-✅ **Self-Service**: IT teams can deploy agents without platform access
+The `/v1/webhooks/agent-connected` endpoint remains available for **internal use only** (N8N, platform services). It requires `PLATFORM_API_KEY` authentication and is never called by client-installed agents.

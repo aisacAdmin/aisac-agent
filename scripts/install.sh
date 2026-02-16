@@ -27,7 +27,6 @@ DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/v1/logs"
 DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
 DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/v1/register"
-DEFAULT_PLATFORM_WEBHOOK="https://api.aisac.cisec.es/v1/webhooks/agent-connected"
 SERVICE_WAS_RUNNING=false
 REGISTRATION_SUCCESS=false
 
@@ -168,6 +167,10 @@ register_agent() {
     local api_key="$2"
     local asset_id="$3"
     local register_url="${4:-$DEFAULT_REGISTER_URL}"
+    # Optional: Command Server data (passed as JSON string or empty)
+    local cs_api_token="${5:-}"
+    local cs_url="${6:-}"
+    local cs_version="${7:-}"
 
     log_info "Registering agent with AISAC platform..."
 
@@ -190,6 +193,26 @@ register_agent() {
         ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || echo "")
     fi
 
+    # Determine capabilities
+    local capabilities='["collector", "heartbeat"]'
+    if [ -n "$cs_api_token" ]; then
+        capabilities='["collector", "soar", "heartbeat"]'
+    fi
+
+    # Build command_server block if CS data provided
+    local cs_block=""
+    if [ -n "$cs_api_token" ]; then
+        cs_block=$(cat <<CSEOF
+,
+    "command_server": {
+        "api_token": "${cs_api_token}",
+        "url": "${cs_url}",
+        "version": "${cs_version}"
+    }
+CSEOF
+)
+    fi
+
     # Build JSON payload
     local payload=$(cat <<EOF
 {
@@ -202,7 +225,7 @@ register_agent() {
     "kernel": "${kernel}",
     "ip_address": "${ip_address}",
     "version": "1.0.1",
-    "capabilities": ["collector", "soar"]
+    "capabilities": ${capabilities}${cs_block}
 }
 EOF
 )
@@ -400,9 +423,6 @@ generate_api_token() {
 
 install_command_server() {
     local api_token="$1"
-    local server_url="$2"
-    local webhook_url="${PLATFORM_WEBHOOK_URL:-}"
-    local platform_key="${PLATFORM_API_KEY:-}"
 
     log_info "Installing AISAC Command Server..."
 
@@ -438,20 +458,6 @@ install_command_server() {
     exec_cmd+="    --ca $CONFIG_DIR/certs/ca.crt \\\\\n"
     exec_cmd+="    --api-token \"${api_token}\" \\\\\n"
     exec_cmd+="    --api-mtls=false \\\\\n"
-
-    # Add server URL (critical for SOAR webhook notifications)
-    if [ -n "$server_url" ]; then
-        exec_cmd+="    --server-url \"${server_url}\" \\\\\n"
-    fi
-
-    # Add webhook parameters if configured
-    if [ -n "$webhook_url" ]; then
-        exec_cmd+="    --platform-webhook \"${webhook_url}\" \\\\\n"
-    fi
-    if [ -n "$platform_key" ]; then
-        exec_cmd+="    --platform-api-key \"${platform_key}\" \\\\\n"
-    fi
-
     exec_cmd+="    --log-level info"
 
     cat > /etc/systemd/system/aisac-server.service << EOF
@@ -657,21 +663,14 @@ configure_agent() {
     fi
 
     #--------------------------------------------------------------------------
-    # Step 2: Auto-generate Agent ID and Register
+    # Step 2: Auto-generate Agent ID
     #--------------------------------------------------------------------------
     echo ""
-    echo -e "${YELLOW}--- Step 2: Agent Registration ---${NC}"
+    echo -e "${YELLOW}--- Step 2: Agent ID ---${NC}"
     echo ""
 
     AGENT_ID=$(generate_agent_id)
     log_info "Generated Agent ID: ${AGENT_ID}"
-
-    # Attempt registration if we have valid credentials
-    if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
-        register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
-    else
-        log_warning "Skipping registration (missing credentials). Configure manually later."
-    fi
 
     #--------------------------------------------------------------------------
     # Step 3: SOAR Configuration (optional)
@@ -684,6 +683,7 @@ configure_agent() {
 
     INSTALL_COMMAND_SERVER=false
     SERVER_API_TOKEN=""
+    PUBLIC_SERVER_URL=""
 
     if prompt_yes_no "Enable SOAR functionality (receive commands from server)?" "n"; then
         SOAR_ENABLED=true
@@ -711,30 +711,12 @@ configure_agent() {
             echo -e "${CYAN}${SERVER_API_TOKEN}${NC}"
             echo ""
 
-            # Platform webhook configuration
-            echo -e "${BLUE}Platform Webhook: Notify AISAC platform when agents connect.${NC}"
-            echo -e "${BLUE}This allows the platform to automatically save the API token for SOAR workflows.${NC}"
+            # Public Server URL (needed for platform to send commands back)
+            echo -e "${BLUE}Public Server URL: Used by the platform to send commands back to agents.${NC}"
+            echo -e "${BLUE}This must be the publicly accessible URL (IP or domain) where this server listens.${NC}"
+            echo -e "${YELLOW}Example: https://148.230.125.219:8443${NC}"
             echo ""
-
-            if prompt_yes_no "Enable platform webhook notifications?" "y"; then
-                PLATFORM_WEBHOOK_URL=$(prompt "Platform webhook URL" "$DEFAULT_PLATFORM_WEBHOOK")
-                PLATFORM_API_KEY=$(prompt_password "Platform API key")
-                echo ""
-
-                # Prompt for public server URL (critical for SOAR)
-                echo -e "${BLUE}Public Server URL: Used by the platform to send commands back to agents.${NC}"
-                echo -e "${BLUE}This must be the publicly accessible URL (IP or domain) where this server listens.${NC}"
-                echo -e "${YELLOW}Example: https://148.230.125.219:8443${NC}"
-                echo ""
-                PUBLIC_SERVER_URL=$(prompt "Public Server URL" "https://$(hostname -I | awk '{print $1}'):8443")
-                echo ""
-
-                log_success "Platform webhook configured"
-            else
-                PLATFORM_WEBHOOK_URL=""
-                PLATFORM_API_KEY=""
-                PUBLIC_SERVER_URL=""
-            fi
+            PUBLIC_SERVER_URL=$(prompt "Public Server URL" "https://$(hostname -I | awk '{print $1}'):8443")
             echo ""
         else
             SERVER_URL=$(prompt "Command Server WebSocket URL" "$DEFAULT_SERVER_URL")
@@ -780,6 +762,24 @@ configure_agent() {
         SERVER_URL="$DEFAULT_SERVER_URL"
         TLS_ENABLED=false
         GENERATE_CERTS=false
+    fi
+
+    #--------------------------------------------------------------------------
+    # Register agent with platform (includes CS data if SOAR enabled)
+    #--------------------------------------------------------------------------
+    echo ""
+    echo -e "${YELLOW}--- Agent Registration ---${NC}"
+    echo ""
+
+    if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
+        if [ -n "$SERVER_API_TOKEN" ] && [ -n "$PUBLIC_SERVER_URL" ]; then
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$DEFAULT_REGISTER_URL" \
+                "$SERVER_API_TOKEN" "$PUBLIC_SERVER_URL" "1.0.1"
+        else
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
+        fi
+    else
+        log_warning "Skipping registration (missing credentials). Configure manually later."
     fi
 
     #--------------------------------------------------------------------------
@@ -1450,6 +1450,8 @@ uninstall() {
 # AISAC_SOAR        - Enable SOAR (true/false, default: false)
 # AISAC_COLLECTOR   - Enable Collector (true/false, default: true)
 # AISAC_HEARTBEAT   - Enable Heartbeat (true/false, default: true)
+# AISAC_CS_TOKEN    - Command Server API token (optional, for SOAR)
+# AISAC_CS_URL      - Command Server public URL (optional, for SOAR)
 # AISAC_NONINTERACTIVE - Run in non-interactive mode (true/false)
 
 configure_noninteractive() {
@@ -1463,13 +1465,6 @@ configure_noninteractive() {
     AGENT_ID=$(generate_agent_id)
     log_info "Generated Agent ID: ${AGENT_ID}"
 
-    # Attempt registration
-    if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
-        register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
-    else
-        log_warning "Missing credentials. Set AISAC_API_KEY and AISAC_ASSET_ID environment variables."
-    fi
-
     # Features (with defaults)
     SOAR_ENABLED="${AISAC_SOAR:-false}"
     COLLECTOR_ENABLED="${AISAC_COLLECTOR:-true}"
@@ -1477,8 +1472,24 @@ configure_noninteractive() {
 
     SERVER_URL="$DEFAULT_SERVER_URL"
     TLS_ENABLED=false
+    SERVER_API_TOKEN=""
+    PUBLIC_SERVER_URL=""
     if [ "$SOAR_ENABLED" = "true" ]; then
         TLS_ENABLED=true
+        SERVER_API_TOKEN="${AISAC_CS_TOKEN:-}"
+        PUBLIC_SERVER_URL="${AISAC_CS_URL:-}"
+    fi
+
+    # Attempt registration (with CS data if SOAR enabled)
+    if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
+        if [ -n "$SERVER_API_TOKEN" ] && [ -n "$PUBLIC_SERVER_URL" ]; then
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$DEFAULT_REGISTER_URL" \
+                "$SERVER_API_TOKEN" "$PUBLIC_SERVER_URL" "1.0.1"
+        else
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
+        fi
+    else
+        log_warning "Missing credentials. Set AISAC_API_KEY and AISAC_ASSET_ID environment variables."
     fi
 
     INGEST_URL="$DEFAULT_INGEST_URL"
@@ -1596,7 +1607,7 @@ main() {
     # Install Command Server if requested
     if [ "${INSTALL_COMMAND_SERVER:-false}" = "true" ]; then
         echo ""
-        install_command_server "$SERVER_API_TOKEN" "${PUBLIC_SERVER_URL:-}"
+        install_command_server "$SERVER_API_TOKEN"
     fi
 
     generate_config
