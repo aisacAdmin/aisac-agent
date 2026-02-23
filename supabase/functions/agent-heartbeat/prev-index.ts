@@ -1,20 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-requested-with, x-api-key',
-  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS, PUT, DELETE',
-  'Access-Control-Max-Age': '86400',
-};
-
-function getCorsHeaders(_req: Request): Record<string, string> {
-  return corsHeaders;
-}
-
-function handleCorsPreflight(_req: Request): Response {
-  return new Response(null, { status: 204, headers: corsHeaders });
-}
+import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
 
 // Rate limiting: max heartbeats per minute per asset
 const RATE_LIMIT_MAX = 10;
@@ -69,7 +55,7 @@ interface HeartbeatPayload {
   };
 }
 
-serve(async (req: Request) => {
+serve(async req => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return handleCorsPreflight(req);
@@ -85,12 +71,10 @@ serve(async (req: Request) => {
       });
     }
 
-    // Validate API key format: ak_<64 hex chars> or aisac_<48 hex chars>
-    const validAkFormat = apiKey.startsWith('ak_') && /^ak_[0-9a-f]{63}$/.test(apiKey);
-    const validAisacFormat = apiKey.startsWith('aisac_') && /^aisac_[0-9a-f]{48}$/.test(apiKey);
-    if (!validAkFormat && !validAisacFormat) {
+    // Validate API key format: aisac_<48 hex chars> = 54 chars total
+    if (!apiKey.startsWith('aisac_') || apiKey.length !== 54) {
       return new Response(
-        JSON.stringify({ error: 'Invalid API key format. Expected: ak_<64 hex chars> or aisac_<48 hex chars>' }),
+        JSON.stringify({ error: 'Invalid API key format. Expected: aisac_<48 hex chars>' }),
         { status: 401, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } }
       );
     }
@@ -160,7 +144,7 @@ serve(async (req: Request) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // 5. Verify API key and get asset
-    // Compare API key directly (keys stored as ak_<64 hex> or aisac_<48 hex>)
+    // Compare API key directly (keys are stored as plaintext with format: aisac_<48 hex chars>)
     const { data: asset, error: assetError } = await supabase
       .from('monitored_assets')
       .select('id, tenant_id, criticality, ingestion_enabled, status')
@@ -170,7 +154,7 @@ serve(async (req: Request) => {
 
     if (assetError || !asset) {
       // Log failed attempt for security audit
-      console.warn(`Invalid API key attempt for asset: ${payload.asset_id}`, assetError?.message);
+      console.warn(`Invalid API key attempt for asset: ${payload.asset_id}`);
       return new Response(JSON.stringify({ error: 'Invalid API key or asset not found' }), {
         status: 401,
         headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
@@ -230,7 +214,7 @@ serve(async (req: Request) => {
 
       // Optional: Insert into health history only on status change
       // This reduces DB writes significantly
-      const { error: historyError } = await supabase
+      await supabase
         .from('asset_health_history')
         .insert({
           asset_id: asset.id,
@@ -242,11 +226,11 @@ serve(async (req: Request) => {
             new_status: newStatus,
             metrics: payload.metrics,
           },
+        })
+        .catch(err => {
+          // Don't fail the heartbeat if history insert fails
+          console.warn('Failed to insert health history:', err);
         });
-      if (historyError) {
-        // Don't fail the heartbeat if history insert fails
-        console.warn('Failed to insert health history:', historyError);
-      }
     }
 
     // 8. Calculate next heartbeat interval based on criticality
