@@ -1,0 +1,328 @@
+# AISAC - AISAC Agent Installer for Windows
+#
+# Reads tenant config from C:\Windows\Temp\aisac-register.json
+# (written by install-wazuh-agent.ps1) and installs the AISAC Agent.
+#
+# Usage:
+#   .\install-aisac-agent.ps1
+#
+# Requires:
+#   C:\Windows\Temp\aisac-register.json  - Written by install-wazuh-agent.ps1
+#
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$InstallDir     = "C:\Program Files\AISAC"
+$ConfigDir      = "C:\ProgramData\AISAC"
+$LogDir         = "C:\ProgramData\AISAC\logs"
+$DataDir        = "C:\ProgramData\AISAC\data"
+$BinaryName     = "aisac-agent.exe"
+$ServiceName    = "AISACAgent"
+$RegisterOutput = "C:\Windows\Temp\aisac-register.json"
+
+function Write-Info    { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Cyan }
+function Write-Ok      { param($msg) Write-Host "[OK]    $msg" -ForegroundColor Green }
+function Write-Fail    { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
+
+#------------------------------------------------------------------------------
+# Load config from agent-register response
+#------------------------------------------------------------------------------
+
+function Get-RegisterConfig {
+    if (-not (Test-Path $RegisterOutput)) {
+        Write-Fail "Register output not found: $RegisterOutput"
+        Write-Fail "Run install-wazuh-agent.ps1 first"
+        exit 1
+    }
+
+    $data = Get-Content $RegisterOutput -Raw | ConvertFrom-Json
+
+    $script:ApiKey       = $data.aisac.api_key
+    $script:AssetId      = $data.asset_id
+    $script:HeartbeatUrl = $data.aisac.heartbeat_url
+    $script:IngestUrl    = $data.aisac.ingest_url
+    $script:TenantId     = $data.tenant_id
+
+    if (-not $script:ApiKey -or -not $script:AssetId) {
+        Write-Fail "Missing api_key or asset_id in $RegisterOutput"
+        exit 1
+    }
+
+    Write-Ok "Config loaded from $RegisterOutput"
+    Write-Info "  Asset ID:      $($script:AssetId)"
+    Write-Info "  Tenant ID:     $($script:TenantId)"
+    Write-Info "  Heartbeat URL: $($script:HeartbeatUrl)"
+}
+
+#------------------------------------------------------------------------------
+# Create directories
+#------------------------------------------------------------------------------
+
+function New-Directories {
+    Write-Info "Creating directories..."
+    @($InstallDir, $ConfigDir, $LogDir, $DataDir) | ForEach-Object {
+        if (-not (Test-Path $_)) {
+            New-Item -ItemType Directory -Path $_ -Force | Out-Null
+        }
+    }
+    Write-Ok "Directories created"
+}
+
+#------------------------------------------------------------------------------
+# Install binary
+#------------------------------------------------------------------------------
+
+function Install-Binary {
+    Write-Info "Installing AISAC Agent binary..."
+
+    $binaryPath = Join-Path $InstallDir $BinaryName
+
+    # Stop service if running
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {
+        Stop-Service -Name $ServiceName -Force
+        Start-Sleep -Seconds 2
+    }
+
+    # Option 1: Local binary
+    $localBinary = Join-Path $PSScriptRoot "aisac-agent-windows-amd64.exe"
+    if (Test-Path $localBinary) {
+        Copy-Item $localBinary $binaryPath -Force
+        Write-Ok "Binary copied from local path"
+        return
+    }
+
+    # Option 2: Download from GitHub Releases
+    $downloadUrl = "https://github.com/aisacAdmin/aisac-agent/releases/latest/download/aisac-agent-windows-amd64.exe"
+    Write-Info "Downloading from: $downloadUrl"
+    try {
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath -UseBasicParsing
+        Write-Ok "Binary downloaded"
+    } catch {
+        Write-Fail "Failed to download binary: $_"
+        exit 1
+    }
+}
+
+#------------------------------------------------------------------------------
+# Generate config
+#------------------------------------------------------------------------------
+
+function New-Config {
+    Write-Info "Generating configuration..."
+
+    $hostname  = $env:COMPUTERNAME
+    $randomSuffix = -join ((65..90) + (97..122) | Get-Random -Count 4 | ForEach-Object { [char]$_ })
+    $agentId   = "agent-$($hostname.ToLower())-$randomSuffix"
+    $configPath = Join-Path $ConfigDir "agent.yaml"
+
+    # Detect Suricata (Windows path)
+    $suricataPath = "C:\Program Files\Suricata\log\eve.json"
+    $enableSuricata = Test-Path $suricataPath
+
+    if ($enableSuricata) { Write-Ok "Detected: Suricata at $suricataPath" }
+
+    $suricataBlock = ""
+    if ($enableSuricata) {
+        $suricataBlock = @"
+
+  sources:
+    - name: suricata
+      type: file
+      path: $($suricataPath.Replace('\', '/'))
+      parser: suricata_eve
+      tags:
+        - security
+        - ids
+"@
+    }
+
+    # Extract domain from heartbeat URL for control_plane
+    $heartbeatDomain = ([System.Uri]$script:HeartbeatUrl).Host
+
+    $config = @"
+# AISAC Agent Configuration
+# Generated by installer on $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+agent:
+  id: "$agentId"
+  labels:
+    - production
+  heartbeat_interval: 30s
+  reconnect_delay: 5s
+  max_reconnect_delay: 5m
+
+server:
+  enabled: false
+  url: "wss://localhost:8443/ws"
+
+tls:
+  enabled: false
+
+actions:
+  enabled:
+    - block_ip
+    - unblock_ip
+    - isolate_host
+    - unisolate_host
+    - disable_user
+    - enable_user
+    - kill_process
+  default_timeout: 5m
+
+heartbeat:
+  enabled: true
+  url: "$($script:HeartbeatUrl)"
+  api_key: "$($script:ApiKey)"
+  asset_id: "$($script:AssetId)"
+  interval: 120s
+  timeout: 10s
+  skip_tls_verify: false
+
+collector:
+  enabled: $($enableSuricata.ToString().ToLower())
+$suricataBlock
+
+  output:
+    type: http
+    url: "$($script:IngestUrl)"
+    api_key: "$($script:ApiKey)"
+    asset_id: "$($script:AssetId)"
+    timeout: 30s
+    retry_attempts: 3
+    retry_delay: 5s
+    skip_tls_verify: false
+
+  batch:
+    size: 100
+    interval: 5s
+
+  file:
+    start_position: end
+    sincedb_path: $($DataDir.Replace('\', '/') + "/sincedb.json")
+
+control_plane:
+  domains:
+    - "$heartbeatDomain"
+  always_allowed: true
+
+safety:
+  state_file: $($DataDir.Replace('\', '/') + "/safety_state.json")
+  auto_revert_enabled: true
+  default_ttl: 1h
+  action_ttls:
+    isolate_host: 30m
+    block_ip: 4h
+    disable_user: 2h
+  heartbeat_failure_threshold: 5
+  recovery_actions:
+    - unisolate_host
+    - unblock_all_ips
+
+logging:
+  level: "info"
+  format: "json"
+  output: "file"
+  file: $($LogDir.Replace('\', '/') + "/agent.log")
+"@
+
+    $config | Set-Content -Path $configPath -Encoding UTF8
+    Write-Ok "Configuration saved to $configPath"
+}
+
+#------------------------------------------------------------------------------
+# Install Windows Service using NSSM
+#------------------------------------------------------------------------------
+
+function Install-Service {
+    Write-Info "Installing AISAC Agent as Windows Service..."
+
+    $binaryPath = Join-Path $InstallDir $BinaryName
+    $configPath = Join-Path $ConfigDir "agent.yaml"
+    $nssmPath   = Join-Path $InstallDir "nssm.exe"
+
+    # Download NSSM if not present
+    if (-not (Test-Path $nssmPath)) {
+        Write-Info "Downloading NSSM (service wrapper)..."
+        $nssmUrl = "https://nssm.cc/release/nssm-2.24.zip"
+        $nssmZip = "$env:TEMP\nssm.zip"
+        Invoke-WebRequest -Uri $nssmUrl -OutFile $nssmZip -UseBasicParsing
+
+        Expand-Archive -Path $nssmZip -DestinationPath "$env:TEMP\nssm" -Force
+        $nssmExe = Get-ChildItem "$env:TEMP\nssm" -Filter "nssm.exe" -Recurse `
+            | Where-Object { $_.FullName -like "*win64*" } | Select-Object -First 1
+        Copy-Item $nssmExe.FullName $nssmPath -Force
+        Remove-Item $nssmZip, "$env:TEMP\nssm" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Ok "NSSM downloaded"
+    }
+
+    # Remove existing service if present
+    $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($existing) {
+        Write-Info "Removing existing service..."
+        & $nssmPath stop $ServiceName confirm 2>$null
+        & $nssmPath remove $ServiceName confirm 2>$null
+        Start-Sleep -Seconds 2
+    }
+
+    # Install service
+    & $nssmPath install $ServiceName $binaryPath "-c `"$configPath`""
+    & $nssmPath set $ServiceName DisplayName "AISAC Security Agent"
+    & $nssmPath set $ServiceName Description "AISAC SIEM/SOAR Agent - Heartbeat and incident response"
+    & $nssmPath set $ServiceName Start SERVICE_AUTO_START
+    & $nssmPath set $ServiceName AppStdout (Join-Path $LogDir "service-stdout.log")
+    & $nssmPath set $ServiceName AppStderr (Join-Path $LogDir "service-stderr.log")
+
+    Write-Ok "Service installed"
+}
+
+#------------------------------------------------------------------------------
+# Start service
+#------------------------------------------------------------------------------
+
+function Start-AgentService {
+    Write-Info "Starting AISAC Agent service..."
+    Start-Service -Name $ServiceName
+    Start-Sleep -Seconds 3
+
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {
+        Write-Ok "AISAC Agent is running"
+    } else {
+        Write-Fail "Failed to start AISAC Agent"
+        Write-Info "Check logs at: $LogDir"
+        exit 1
+    }
+}
+
+#------------------------------------------------------------------------------
+# Main
+#------------------------------------------------------------------------------
+
+# Check admin
+$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Fail "Must be run as Administrator"
+    exit 1
+}
+
+Get-RegisterConfig
+New-Directories
+Install-Binary
+New-Config
+Install-Service
+Start-AgentService
+
+# Cleanup temp file
+Remove-Item $RegisterOutput -Force -ErrorAction SilentlyContinue
+
+Write-Host ""
+Write-Host "================================================================" -ForegroundColor Green
+Write-Host "         AISAC Agent installed successfully!" -ForegroundColor Green
+Write-Host "================================================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "  Config:   $ConfigDir\agent.yaml"
+Write-Host "  Logs:     $LogDir\agent.log"
+Write-Host "  Status:   Get-Service $ServiceName"
+Write-Host ""
