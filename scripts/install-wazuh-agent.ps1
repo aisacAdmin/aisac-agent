@@ -39,10 +39,9 @@ function Invoke-Register {
         $response = Invoke-RestMethod `
             -Uri $RegisterUrl `
             -Method GET `
-            -Headers @{ "X-API-Key" = $ApiKey } `
-            -ContentType "application/json"
+            -Headers @{ "X-API-Key" = $ApiKey }
     } catch {
-        Write-Fail "agent-register failed: $_"
+        Write-Fail "agent-register failed: $($_.Exception.Message)"
         exit 1
     }
 
@@ -70,7 +69,7 @@ function Install-WazuhAgent {
     Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
 
     Write-Info "Installing Wazuh Agent..."
-    $args = @(
+    $msiArgs = @(
         "/i", $msiPath,
         "/q",
         "WAZUH_MANAGER=`"$ManagerIp`"",
@@ -78,7 +77,7 @@ function Install-WazuhAgent {
         "WAZUH_AGENT_NAME=`"$AgentName`"",
         "WAZUH_AGENT_GROUP=`"$AgentGroup`""
     )
-    $result = Start-Process -FilePath "msiexec.exe" -ArgumentList $args -Wait -PassThru
+    $result = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru
     if ($result.ExitCode -ne 0) {
         Write-Fail "Wazuh Agent installation failed (exit code: $($result.ExitCode))"
         exit 1
@@ -117,12 +116,19 @@ $data = Invoke-Register
 $managerIp   = $data.wazuh.manager_ip
 $managerPort = $data.wazuh.manager_port
 $agentGroup  = $data.wazuh.agent_group
-$assetName   = if ($data.asset_name) { $data.asset_name } else { $env:COMPUTERNAME }
+$assetName   = if ($data.PSObject.Properties["asset_name"] -and $data.asset_name) { $data.asset_name } else { $env:COMPUTERNAME }
 
 if (-not $managerIp -or -not $agentGroup) {
     Write-Fail "Missing wazuh config in agent-register response"
+    Write-Fail "Response: $($data | ConvertTo-Json -Depth 5 -Compress)"
     exit 1
 }
+
+if (-not $managerPort) { $managerPort = 1514 }
+
+Write-Info "Manager:    ${managerIp}:${managerPort}"
+Write-Info "Group:      $agentGroup"
+Write-Info "Asset name: $assetName"
 
 # 3. Install Wazuh Agent
 Install-WazuhAgent -ManagerIp $managerIp -ManagerPort $managerPort `

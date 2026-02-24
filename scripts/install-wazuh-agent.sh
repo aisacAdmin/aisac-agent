@@ -32,26 +32,27 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 # Parse JSON
 #------------------------------------------------------------------------------
 
-json_get() {
-    local json="$1"
+json_get_file() {
+    local file="$1"
     local key="$2"
 
     if command -v jq &>/dev/null; then
-        echo "$json" | jq -r "$key // empty"
+        jq -r "$key // empty" "$file"
     elif command -v python3 &>/dev/null; then
-        echo "$json" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
+        python3 -c "
+import json
+with open('$file') as f:
+    data = json.load(f)
 keys = '$key'.lstrip('.').split('.')
 val = data
 for k in keys:
     val = val.get(k, '') if isinstance(val, dict) else ''
-print(val)
+print(val if val else '')
 "
     else
         local simple_key
         simple_key=$(echo "$key" | sed 's/.*\.//')
-        echo "$json" | grep -o "\"${simple_key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+        grep -o "\"${simple_key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" \
             | head -1 | sed 's/.*":\s*"\(.*\)"/\1/'
     fi
 }
@@ -79,7 +80,6 @@ call_register() {
 
     echo "$response" > "$REGISTER_OUTPUT"
     log_success "Registration data received"
-    echo "$response"
 }
 
 #------------------------------------------------------------------------------
@@ -194,16 +194,15 @@ main() {
         exit 1
     fi
 
-    # 1. Call agent-register
-    local response
-    response=$(call_register "$api_key" "$register_url")
+    # 1. Call agent-register (saves response to REGISTER_OUTPUT)
+    call_register "$api_key" "$register_url"
 
-    # 2. Parse Wazuh config from response
+    # 2. Parse Wazuh config from saved response (read file directly to avoid bash variable issues)
     local manager_ip manager_port agent_group asset_name
-    manager_ip=$(json_get "$response" ".wazuh.manager_ip")
-    manager_port=$(json_get "$response" ".wazuh.manager_port")
-    agent_group=$(json_get "$response" ".wazuh.agent_group")
-    asset_name=$(json_get "$response" ".asset_name")
+    manager_ip=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.manager_ip")
+    manager_port=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.manager_port")
+    agent_group=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.agent_group")
+    asset_name=$(json_get_file "$REGISTER_OUTPUT" ".asset_name")
 
     if [ -z "$manager_ip" ] || [ -z "$agent_group" ]; then
         log_error "Missing wazuh config in agent-register response"

@@ -3,15 +3,18 @@
 # AISAC Agent - Main Installer (Linux)
 #
 # Orchestrates the installation of:
-#   1. Wazuh Manager (via install-wazuh-agent.sh)
-#   2. AISAC Agent   (via install-aisac-agent.sh)
+#   1. Wazuh Agent  (via install-wazuh-agent.sh)
+#   2. AISAC Agent  (via install-aisac-agent.sh)
 #
 # Usage:
 #   sudo ./install.sh
 #   sudo ./install.sh --register-url https://custom-url/functions/v1/agent-register
 #
+# One-liner (no repo needed):
+#   curl -fsSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install.sh -o install.sh && sudo bash install.sh
+#
 
-set -e
+set -euo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -23,6 +26,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/functions/v1/agent-register"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts"
 
 log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -35,7 +39,7 @@ print_banner() {
     echo "║                                                               ║"
     echo "║              AISAC Agent Installer v2.0                       ║"
     echo "║                                                               ║"
-    echo "║   Installs: Wazuh Manager + AISAC Agent                      ║"
+    echo "║   Installs: Wazuh Agent + AISAC Agent                        ║"
     echo "║                                                               ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -64,15 +68,19 @@ check_dependencies() {
     log_success "Dependencies OK"
 }
 
-check_scripts() {
+download_scripts() {
     for script in install-wazuh-agent.sh install-aisac-agent.sh; do
         if [ ! -f "${SCRIPT_DIR}/${script}" ]; then
-            log_error "Missing script: ${SCRIPT_DIR}/${script}"
-            exit 1
+            log_info "Downloading ${script}..."
+            if ! curl -fsSL "${GITHUB_RAW_URL}/${script}" -o "${SCRIPT_DIR}/${script}"; then
+                log_error "Failed to download ${script} from ${GITHUB_RAW_URL}/${script}"
+                exit 1
+            fi
+            log_success "Downloaded ${script}"
         fi
         chmod +x "${SCRIPT_DIR}/${script}"
     done
-    log_success "Scripts found"
+    log_success "Scripts ready"
 }
 
 prompt_api_key() {
@@ -123,7 +131,9 @@ main() {
     print_banner
     check_root
     check_dependencies
-    check_scripts
+    download_scripts
+
+    log_info "Register URL: ${REGISTER_URL}"
 
     # Get API key (from env or prompt)
     if [ -n "${AISAC_API_KEY:-}" ]; then
@@ -135,11 +145,18 @@ main() {
 
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  Step 1/2: Installing Wazuh Manager                           ${NC}"
+    echo -e "${CYAN}  Step 1/2: Installing Wazuh Agent                            ${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
-    bash "${SCRIPT_DIR}/install-wazuh-agent.sh" "$API_KEY" "$REGISTER_URL"
+    if ! bash "${SCRIPT_DIR}/install-wazuh-agent.sh" "$API_KEY" "$REGISTER_URL"; then
+        log_error "Wazuh Agent installation failed"
+        log_error "Check the error above. Common issues:"
+        log_error "  - Invalid API Key"
+        log_error "  - Register URL unreachable: ${REGISTER_URL}"
+        log_error "  - Wazuh Manager ports (1514/1515) not open"
+        exit 1
+    fi
 
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
@@ -147,15 +164,20 @@ main() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
-    bash "${SCRIPT_DIR}/install-aisac-agent.sh"
+    if ! bash "${SCRIPT_DIR}/install-aisac-agent.sh"; then
+        log_error "AISAC Agent installation failed"
+        log_error "Check the error above."
+        exit 1
+    fi
 
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}               Installation complete!                          ${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  ${CYAN}Wazuh Manager:${NC}  systemctl status wazuh-manager"
+    echo -e "  ${CYAN}Wazuh Agent:${NC}    systemctl status wazuh-agent"
     echo -e "  ${CYAN}AISAC Agent:${NC}    systemctl status aisac-agent"
+    echo -e "  ${CYAN}Launch AISAC:${NC}   /opt/aisac/aisac-agent -c /etc/aisac/agent.yaml"
     echo -e "  ${CYAN}AISAC Logs:${NC}     tail -f /var/log/aisac/agent.log"
     echo ""
 }

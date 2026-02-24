@@ -39,26 +39,27 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 # Parse JSON
 #------------------------------------------------------------------------------
 
-json_get() {
-    local json="$1"
+json_get_file() {
+    local file="$1"
     local key="$2"
 
     if command -v jq &>/dev/null; then
-        echo "$json" | jq -r "$key // empty"
+        jq -r "$key // empty" "$file"
     elif command -v python3 &>/dev/null; then
-        echo "$json" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
+        python3 -c "
+import json
+with open('$file') as f:
+    data = json.load(f)
 keys = '$key'.lstrip('.').split('.')
 val = data
 for k in keys:
     val = val.get(k, '') if isinstance(val, dict) else ''
-print(val)
+print(val if val else '')
 "
     else
         local simple_key
         simple_key=$(echo "$key" | sed 's/.*\.//')
-        echo "$json" | grep -o "\"${simple_key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+        grep -o "\"${simple_key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" \
             | head -1 | sed 's/.*":\s*"\(.*\)"/\1/'
     fi
 }
@@ -74,14 +75,11 @@ load_register_config() {
         exit 1
     fi
 
-    local json
-    json=$(cat "$REGISTER_OUTPUT")
-
-    API_KEY=$(json_get "$json" ".aisac.api_key")
-    ASSET_ID=$(json_get "$json" ".asset_id")
-    HEARTBEAT_URL=$(json_get "$json" ".aisac.heartbeat_url")
-    INGEST_URL=$(json_get "$json" ".aisac.ingest_url")
-    TENANT_ID=$(json_get "$json" ".tenant_id")
+    API_KEY=$(json_get_file "$REGISTER_OUTPUT" ".aisac.api_key")
+    ASSET_ID=$(json_get_file "$REGISTER_OUTPUT" ".asset_id")
+    HEARTBEAT_URL=$(json_get_file "$REGISTER_OUTPUT" ".aisac.heartbeat_url")
+    INGEST_URL=$(json_get_file "$REGISTER_OUTPUT" ".aisac.ingest_url")
+    TENANT_ID=$(json_get_file "$REGISTER_OUTPUT" ".tenant_id")
 
     if [ -z "$API_KEY" ] || [ -z "$ASSET_ID" ]; then
         log_error "Missing api_key or asset_id in ${REGISTER_OUTPUT}"
@@ -230,7 +228,6 @@ EOF
         - ids
 EOF
     fi
-    fi
 
     cat >> "$CONFIG_DIR/agent.yaml" << EOF
 
@@ -273,8 +270,7 @@ safety:
 logging:
   level: "info"
   format: "json"
-  output: "file"
-  file: "${LOG_DIR}/agent.log"
+  output: "stdout"
 EOF
 
     chmod 600 "$CONFIG_DIR/agent.yaml"
@@ -300,13 +296,8 @@ User=root
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} -c ${CONFIG_DIR}/agent.yaml
 Restart=always
 RestartSec=5
-StandardOutput=null
-StandardError=journal
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=${DATA_DIR} ${LOG_DIR}
-PrivateTmp=true
+StandardOutput=append:${LOG_DIR}/agent.log
+StandardError=append:${LOG_DIR}/agent.log
 LimitNOFILE=65535
 
 [Install]

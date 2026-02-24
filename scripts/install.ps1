@@ -20,6 +20,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$GitHubRawUrl = "https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts"
 
 function Write-Info    { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Cyan }
 function Write-Ok      { param($msg) Write-Host "[OK]    $msg" -ForegroundColor Green }
@@ -44,15 +45,21 @@ function Check-Admin {
     }
 }
 
-function Check-Scripts {
+function Get-Scripts {
     @("install-wazuh-agent.ps1", "install-aisac-agent.ps1") | ForEach-Object {
         $path = Join-Path $ScriptDir $_
         if (-not (Test-Path $path)) {
-            Write-Fail "Missing script: $path"
-            exit 1
+            Write-Info "Downloading $_..."
+            try {
+                Invoke-WebRequest -Uri "$GitHubRawUrl/$_" -OutFile $path -UseBasicParsing
+                Write-Ok "Downloaded $_"
+            } catch {
+                Write-Fail "Failed to download $_`: $($_.Exception.Message)"
+                exit 1
+            }
         }
     }
-    Write-Ok "Scripts found"
+    Write-Ok "Scripts ready"
 }
 
 function Get-ApiKey {
@@ -87,7 +94,9 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 
 Print-Banner
 Check-Admin
-Check-Scripts
+Get-Scripts
+
+Write-Info "Register URL: $RegisterUrl"
 
 $ApiKey = Get-ApiKey
 
@@ -97,7 +106,17 @@ Write-Host "  Step 1/2: Installing Wazuh Agent                              " -F
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-& (Join-Path $ScriptDir "install-wazuh-agent.ps1") -ApiKey $ApiKey -RegisterUrl $RegisterUrl
+try {
+    & (Join-Path $ScriptDir "install-wazuh-agent.ps1") -ApiKey $ApiKey -RegisterUrl $RegisterUrl
+    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Exit code: $LASTEXITCODE" }
+} catch {
+    Write-Fail "Wazuh Agent installation failed: $($_.Exception.Message)"
+    Write-Fail "Common issues:"
+    Write-Fail "  - Invalid API Key"
+    Write-Fail "  - Register URL unreachable: $RegisterUrl"
+    Write-Fail "  - Wazuh Manager ports (1514/1515) not open"
+    exit 1
+}
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
@@ -105,7 +124,14 @@ Write-Host "  Step 2/2: Installing AISAC Agent                              " -F
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-& (Join-Path $ScriptDir "install-aisac-agent.ps1")
+try {
+    & (Join-Path $ScriptDir "install-aisac-agent.ps1")
+    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Exit code: $LASTEXITCODE" }
+} catch {
+    Write-Fail "AISAC Agent installation failed: $($_.Exception.Message)"
+    Write-Fail "Check the error above."
+    exit 1
+}
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
