@@ -26,7 +26,7 @@ BINARY_NAME="aisac-agent"
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
 DEFAULT_INGEST_URL="https://api.aisac.cisec.es/v1/logs"
 DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
-DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/v1/register"
+DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/v1/agent-webhook"
 SERVICE_WAS_RUNNING=false
 REGISTRATION_SUCCESS=false
 
@@ -167,10 +167,9 @@ register_agent() {
     local api_key="$2"
     local asset_id="$3"
     local register_url="${4:-$DEFAULT_REGISTER_URL}"
-    # Optional: Command Server data (passed as JSON string or empty)
+    # Optional: Command Server data
     local cs_api_token="${5:-}"
     local cs_url="${6:-}"
-    local cs_version="${7:-}"
 
     log_info "Registering agent with AISAC platform..."
     if [ -n "$cs_api_token" ]; then
@@ -204,33 +203,33 @@ register_agent() {
         capabilities='["collector", "soar", "heartbeat"]'
     fi
 
-    # Build command_server block if CS data provided
-    local cs_block=""
+    # Build command_server fields if CS data provided
+    local cs_fields=""
     if [ -n "$cs_api_token" ]; then
-        cs_block=$(cat <<CSEOF
+        cs_fields=$(cat <<CSEOF
 ,
-    "command_server": {
-        "api_token": "${cs_api_token}",
-        "url": "${cs_url}",
-        "version": "${cs_version}"
-    }
+    "command_server_token": "${cs_api_token}",
+    "command_server_url": "${cs_url}"
 CSEOF
 )
     fi
 
-    # Build JSON payload
+    # Build JSON payload (agent-webhook format)
     local payload=$(cat <<EOF
 {
-    "agent_id": "${agent_id}",
+    "event": "agent_registered",
     "asset_id": "${asset_id}",
-    "hostname": "${hostname}",
-    "os": "${os_info}",
-    "os_version": "${os_version}",
-    "arch": "${arch}",
-    "kernel": "${kernel}",
-    "ip_address": "${ip_address}",
-    "version": "1.0.1",
-    "capabilities": ${capabilities}${cs_block}
+    "agent_info": {
+        "agent_id": "${agent_id}",
+        "hostname": "${hostname}",
+        "os": "${os_info}",
+        "os_version": "${os_version}",
+        "arch": "${arch}",
+        "kernel": "${kernel}",
+        "ip_address": "${ip_address}",
+        "version": "1.0.1",
+        "capabilities": ${capabilities}
+    }${cs_fields}
 }
 EOF
 )
@@ -798,15 +797,18 @@ configure_agent() {
     echo -e "${YELLOW}--- Agent Registration ---${NC}"
     echo ""
 
+    # Registration URL (allow override for staging)
+    local register_url="${AISAC_REGISTER_URL:-$DEFAULT_REGISTER_URL}"
+
     if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
         log_info "DEBUG registration decision: SERVER_API_TOKEN='${SERVER_API_TOKEN:0:8}...' PUBLIC_SERVER_URL='${PUBLIC_SERVER_URL}'"
         if [ -n "$SERVER_API_TOKEN" ] && [ -n "$PUBLIC_SERVER_URL" ]; then
             log_info "Registering WITH command_server data"
-            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$DEFAULT_REGISTER_URL" \
-                "$SERVER_API_TOKEN" "$PUBLIC_SERVER_URL" "1.0.1"
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$register_url" \
+                "$SERVER_API_TOKEN" "$PUBLIC_SERVER_URL"
         else
             log_info "Registering WITHOUT command_server data (SERVER_API_TOKEN empty='$([ -z "$SERVER_API_TOKEN" ] && echo yes || echo no)', PUBLIC_SERVER_URL empty='$([ -z "$PUBLIC_SERVER_URL" ] && echo yes || echo no)')"
-            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$register_url"
         fi
     else
         log_warning "Skipping registration (missing credentials). Configure manually later."
@@ -1482,6 +1484,7 @@ uninstall() {
 # AISAC_HEARTBEAT   - Enable Heartbeat (true/false, default: true)
 # AISAC_CS_TOKEN    - Command Server API token (optional, for SOAR)
 # AISAC_CS_URL      - Command Server public URL (optional, for SOAR)
+# AISAC_REGISTER_URL - Override registration endpoint (optional, for staging)
 # AISAC_NONINTERACTIVE - Run in non-interactive mode (true/false)
 
 configure_noninteractive() {
@@ -1510,13 +1513,16 @@ configure_noninteractive() {
         PUBLIC_SERVER_URL="${AISAC_CS_URL:-}"
     fi
 
+    # Registration URL (allow override for staging)
+    local register_url="${AISAC_REGISTER_URL:-$DEFAULT_REGISTER_URL}"
+
     # Attempt registration (with CS data if SOAR enabled)
     if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
         if [ -n "$SERVER_API_TOKEN" ] && [ -n "$PUBLIC_SERVER_URL" ]; then
-            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$DEFAULT_REGISTER_URL" \
-                "$SERVER_API_TOKEN" "$PUBLIC_SERVER_URL" "1.0.1"
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$register_url" \
+                "$SERVER_API_TOKEN" "$PUBLIC_SERVER_URL"
         else
-            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID"
+            register_agent "$AGENT_ID" "$API_KEY" "$ASSET_ID" "$register_url"
         fi
     else
         log_warning "Missing credentials. Set AISAC_API_KEY and AISAC_ASSET_ID environment variables."
