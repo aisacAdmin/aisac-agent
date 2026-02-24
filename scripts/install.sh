@@ -8,7 +8,7 @@
 #
 # Usage:
 #   sudo ./install.sh
-#   sudo ./install.sh --register-url https://custom-url/functions/v1/agent-register
+#   sudo ./install.sh --register-url https://custom-url/functions/v1/install-config
 #
 # One-liner (no repo needed):
 #   curl -fsSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install.sh -o install.sh && sudo bash install.sh
@@ -25,7 +25,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/functions/v1/agent-register"
+DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/functions/v1/install-config"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts"
 
 log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -114,7 +114,7 @@ main() {
                 echo "Usage: $0 [--register-url <url>]"
                 echo ""
                 echo "Options:"
-                echo "  --register-url   URL of the agent-register Edge Function"
+                echo "  --register-url   URL of the install-config Edge Function"
                 echo "                   Default: ${DEFAULT_REGISTER_URL}"
                 echo ""
                 echo "Non-interactive mode:"

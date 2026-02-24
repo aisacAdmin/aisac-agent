@@ -6,14 +6,14 @@
 #
 # Usage:
 #   .\install.ps1
-#   .\install.ps1 -RegisterUrl https://custom-url/functions/v1/agent-register
+#   .\install.ps1 -RegisterUrl https://custom-url/functions/v1/install-config
 #
 # Non-interactive:
 #   $env:AISAC_API_KEY="aisac_xxx"; .\install.ps1
 #
 
 param(
-    [string]$RegisterUrl = "https://api.aisac.cisec.es/functions/v1/agent-register"
+    [string]$RegisterUrl = "https://api.aisac.cisec.es/functions/v1/install-config"
 )
 
 Set-StrictMode -Version Latest

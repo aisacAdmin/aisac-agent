@@ -39,6 +39,7 @@ function Get-RegisterConfig {
     $data = Get-Content $RegisterOutput -Raw | ConvertFrom-Json
 
     $script:ApiKey       = $data.aisac.api_key
+    $script:AuthToken    = $data.aisac.auth_token
     $script:AssetId      = $data.asset_id
     $script:HeartbeatUrl = $data.aisac.heartbeat_url
     $script:IngestUrl    = $data.aisac.ingest_url
@@ -175,6 +176,7 @@ heartbeat:
   enabled: true
   url: "$($script:HeartbeatUrl)"
   api_key: "$($script:ApiKey)"
+  auth_token: "$($script:AuthToken)"
   asset_id: "$($script:AssetId)"
   interval: 120s
   timeout: 10s

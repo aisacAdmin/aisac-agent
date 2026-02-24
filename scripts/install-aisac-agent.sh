@@ -76,6 +76,7 @@ load_register_config() {
     fi
 
     API_KEY=$(json_get_file "$REGISTER_OUTPUT" ".aisac.api_key")
+    AUTH_TOKEN=$(json_get_file "$REGISTER_OUTPUT" ".aisac.auth_token")
     ASSET_ID=$(json_get_file "$REGISTER_OUTPUT" ".asset_id")
     HEARTBEAT_URL=$(json_get_file "$REGISTER_OUTPUT" ".aisac.heartbeat_url")
     INGEST_URL=$(json_get_file "$REGISTER_OUTPUT" ".aisac.ingest_url")
@@ -126,10 +127,15 @@ install_binary() {
         go build -o "$INSTALL_DIR/$BINARY_NAME" ./cmd/agent/
         log_success "Binary compiled"
 
-    # Option 2: Local prebuilt binary
+    # Option 2: Local prebuilt binary (exact name or with os-arch suffix)
     elif [ -f "./bin/${BINARY_NAME}" ]; then
         cp "./bin/${BINARY_NAME}" "$INSTALL_DIR/$BINARY_NAME"
-        log_success "Binary copied from ./bin/"
+        log_success "Binary copied from ./bin/${BINARY_NAME}"
+    elif ls ./bin/${BINARY_NAME}-*-* &>/dev/null; then
+        local local_bin
+        local_bin=$(ls ./bin/${BINARY_NAME}-*-* | head -1)
+        cp "$local_bin" "$INSTALL_DIR/$BINARY_NAME"
+        log_success "Binary copied from $local_bin"
 
     # Option 3: Download from GitHub Releases
     else
@@ -206,6 +212,7 @@ heartbeat:
   enabled: true
   url: "${HEARTBEAT_URL}"
   api_key: "${API_KEY}"
+  auth_token: "${AUTH_TOKEN}"
   asset_id: "${ASSET_ID}"
   interval: 120s
   timeout: 10s
