@@ -98,6 +98,14 @@ func (t *Tailer) poll(ctx context.Context) error {
 		return fmt.Errorf("stat file: %w", err)
 	}
 
+	// Temporary diagnostic logging at info level
+	if info.Size() != t.offset {
+		t.logger.Info().
+			Int64("file_size", info.Size()).
+			Int64("current_offset", t.offset).
+			Msg("New data detected")
+	}
+
 	// Get file identity
 	inode, device, err := GetFileIdentity(t.source.Path)
 	if err != nil {
@@ -134,7 +142,11 @@ func (t *Tailer) poll(ctx context.Context) error {
 	}
 
 	// Read available lines
-	return t.readLines(ctx)
+	err = t.readLines(ctx)
+	if DebugCollector && err != nil {
+		t.logger.Debug().Err(err).Msg("readLines returned error")
+	}
+	return err
 }
 
 // open opens the file and positions to the correct offset.
@@ -201,6 +213,9 @@ func (t *Tailer) readLines(ctx context.Context) error {
 			if err == io.EOF {
 				// No more data available
 				if linesRead > 0 {
+					if DebugCollector {
+						t.logger.Debug().Int("lines_read", linesRead).Msg("Read batch complete (EOF)")
+					}
 					// Save position periodically
 					t.sincedb.SetOffset(t.source.Path, t.inode, t.device, t.offset)
 				}

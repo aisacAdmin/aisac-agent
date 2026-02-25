@@ -104,6 +104,8 @@ func (b *Batcher) flush(ctx context.Context) {
 	if err := b.flushCallback(ctx, events); err != nil {
 		b.logger.Error().Err(err).Int("count", len(events)).Msg("Flush failed")
 		// Events are lost on failure - could implement retry queue if needed
+	} else {
+		b.logger.Info().Int("count", len(events)).Msg("Flush success")
 	}
 }
 
