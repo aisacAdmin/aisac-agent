@@ -177,6 +177,35 @@ function New-AgentId {
     return "agent-${hostname}-${random}"
 }
 
+# Returns the existing agent ID from disk, or generates and persists a new one.
+# Priority: AISAC_AGENT_ID env var > persisted file > new random ID.
+function Get-OrCreateAgentId {
+    $idFile = Join-Path $DATA_DIR "agent-id"
+
+    # Allow explicit override via env var
+    if ($env:AISAC_AGENT_ID) {
+        Write-Info "Using Agent ID from AISAC_AGENT_ID env var"
+        if (-not (Test-Path $DATA_DIR)) { New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null }
+        Set-Content -Path $idFile -Value $env:AISAC_AGENT_ID -NoNewline
+        return $env:AISAC_AGENT_ID
+    }
+
+    # Reuse persisted ID if it exists
+    if (Test-Path $idFile) {
+        $existingId = (Get-Content $idFile -Raw).Trim()
+        if ($existingId) {
+            Write-Info "Reusing existing Agent ID from $idFile"
+            return $existingId
+        }
+    }
+
+    # Generate new ID and persist it
+    $newId = New-AgentId
+    if (-not (Test-Path $DATA_DIR)) { New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null }
+    Set-Content -Path $idFile -Value $newId -NoNewline
+    return $newId
+}
+
 function Register-Agent {
     param(
         [string]$AgentId,
@@ -668,8 +697,8 @@ function Set-AgentConfiguration {
     Write-Host "  --- Step 2: Agent ID ---" -ForegroundColor Yellow
     Write-Host ""
 
-    $script:AGENT_ID = New-AgentId
-    Write-Info "Generated Agent ID: $($script:AGENT_ID)"
+    $script:AGENT_ID = Get-OrCreateAgentId
+    Write-Info "Agent ID: $($script:AGENT_ID)"
 
     # ── Step 3: SOAR Configuration ──
     Write-Host ""
@@ -966,8 +995,8 @@ function Set-NonInteractiveConfiguration {
     $script:API_KEY  = if ($env:AISAC_API_KEY)  { $env:AISAC_API_KEY }  else { "aisac_your_api_key_here" }
     $script:ASSET_ID = if ($env:AISAC_ASSET_ID) { $env:AISAC_ASSET_ID } else { "your-asset-uuid-here" }
 
-    $script:AGENT_ID = New-AgentId
-    Write-Info "Generated Agent ID: $($script:AGENT_ID)"
+    $script:AGENT_ID = Get-OrCreateAgentId
+    Write-Info "Agent ID: $($script:AGENT_ID)"
 
     $script:SOAR_ENABLED      = if ($env:AISAC_SOAR -eq "true") { $true } else { $false }
     $script:COLLECTOR_ENABLED  = if ($env:AISAC_COLLECTOR -eq "false") { $false } else { $true }
@@ -1509,6 +1538,7 @@ function Main {
         Write-Host "    AISAC_SOAR         Enable SOAR (true/false, default: false)"
         Write-Host "    AISAC_COLLECTOR    Enable Collector (true/false, default: true)"
         Write-Host "    AISAC_HEARTBEAT    Enable Heartbeat (true/false, default: true)"
+        Write-Host "    AISAC_AGENT_ID     Force a specific Agent ID (overrides persisted ID)"
         Write-Host "    AISAC_CS_TOKEN     Command Server API token (for SOAR)"
         Write-Host "    AISAC_CS_URL       Command Server public URL (for SOAR)"
         Write-Host "    AISAC_REGISTER_URL Override registration endpoint (for staging)"

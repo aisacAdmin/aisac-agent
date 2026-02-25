@@ -162,6 +162,41 @@ generate_agent_id() {
     echo "agent-${hostname}-${random_suffix}"
 }
 
+# Returns the existing agent ID from disk, or generates and persists a new one.
+# Priority: AISAC_AGENT_ID env var > persisted file > new random ID.
+get_or_create_agent_id() {
+    local id_file="$DATA_DIR/agent-id"
+
+    # Allow explicit override via env var
+    if [ -n "${AISAC_AGENT_ID:-}" ]; then
+        log_info "Using Agent ID from AISAC_AGENT_ID env var"
+        mkdir -p "$DATA_DIR"
+        echo "${AISAC_AGENT_ID}" > "$id_file"
+        chmod 644 "$id_file"
+        echo "${AISAC_AGENT_ID}"
+        return
+    fi
+
+    # Reuse persisted ID if it exists
+    if [ -f "$id_file" ]; then
+        local existing_id
+        existing_id=$(cat "$id_file" 2>/dev/null | tr -d '[:space:]')
+        if [ -n "$existing_id" ]; then
+            log_info "Reusing existing Agent ID from ${id_file}"
+            echo "$existing_id"
+            return
+        fi
+    fi
+
+    # Generate new ID and persist it
+    local new_id
+    new_id=$(generate_agent_id)
+    mkdir -p "$DATA_DIR"
+    echo "$new_id" > "$id_file"
+    chmod 644 "$id_file"
+    echo "$new_id"
+}
+
 register_agent() {
     local agent_id="$1"
     local api_key="$2"
@@ -675,8 +710,8 @@ configure_agent() {
     echo -e "${YELLOW}--- Step 2: Agent ID ---${NC}"
     echo ""
 
-    AGENT_ID=$(generate_agent_id)
-    log_info "Generated Agent ID: ${AGENT_ID}"
+    AGENT_ID=$(get_or_create_agent_id)
+    log_info "Agent ID: ${AGENT_ID}"
 
     #--------------------------------------------------------------------------
     # Step 3: SOAR Configuration (optional)
@@ -1472,6 +1507,7 @@ uninstall() {
 # AISAC_SOAR        - Enable SOAR (true/false, default: false)
 # AISAC_COLLECTOR   - Enable Collector (true/false, default: true)
 # AISAC_HEARTBEAT   - Enable Heartbeat (true/false, default: true)
+# AISAC_AGENT_ID    - Force a specific Agent ID (optional, overrides persisted ID)
 # AISAC_CS_TOKEN    - Command Server API token (optional, for SOAR)
 # AISAC_CS_URL      - Command Server public URL (optional, for SOAR)
 # AISAC_REGISTER_URL - Override registration endpoint (optional, for staging)
@@ -1484,9 +1520,9 @@ configure_noninteractive() {
     API_KEY="${AISAC_API_KEY:-aisac_your_api_key_here}"
     ASSET_ID="${AISAC_ASSET_ID:-your-asset-uuid-here}"
 
-    # Generate Agent ID
-    AGENT_ID=$(generate_agent_id)
-    log_info "Generated Agent ID: ${AGENT_ID}"
+    # Get or create Agent ID (persisted across reinstalls)
+    AGENT_ID=$(get_or_create_agent_id)
+    log_info "Agent ID: ${AGENT_ID}"
 
     # Features (with defaults)
     SOAR_ENABLED="${AISAC_SOAR:-false}"
