@@ -478,7 +478,7 @@ function Install-CommandServer {
     Write-Info "Creating command server Windows Service..."
 
     $serverExe = "$INSTALL_DIR\$SERVER_BINARY"
-    $serverArgs = "--listen :8443 --cert `"$CERT_DIR\server.crt`" --key `"$CERT_DIR\server.key`" --ca `"$CERT_DIR\ca.crt`" --api-token `"$ApiToken`" --api-mtls=false --log-level info"
+    $serverArgs = "--listen :8443 --cert `"$CERT_DIR\server.crt`" --key `"$CERT_DIR\server.key`" --ca `"$CERT_DIR\ca.crt`" --api-token $ApiToken --api-mtls=false --log-level info"
 
     # Remove existing service if present
     $existing = Get-Service -Name $SERVER_SERVICE -ErrorAction SilentlyContinue

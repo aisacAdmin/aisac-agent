@@ -466,16 +466,6 @@ install_command_server() {
     # Create systemd service for command server
     log_info "Creating command server systemd service..."
 
-    # Build ExecStart command
-    local exec_cmd="$INSTALL_DIR/aisac-server \\\\\n"
-    exec_cmd+="    --listen :8443 \\\\\n"
-    exec_cmd+="    --cert $CONFIG_DIR/certs/server.crt \\\\\n"
-    exec_cmd+="    --key $CONFIG_DIR/certs/server.key \\\\\n"
-    exec_cmd+="    --ca $CONFIG_DIR/certs/ca.crt \\\\\n"
-    exec_cmd+="    --api-token \"${api_token}\" \\\\\n"
-    exec_cmd+="    --api-mtls=false \\\\\n"
-    exec_cmd+="    --log-level info"
-
     cat > /etc/systemd/system/aisac-server.service << EOF
 [Unit]
 Description=AISAC Command Server (SOAR)
@@ -485,7 +475,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=$(echo -e "$exec_cmd")
+ExecStart=$INSTALL_DIR/aisac-server --listen :8443 --cert $CONFIG_DIR/certs/server.crt --key $CONFIG_DIR/certs/server.key --ca $CONFIG_DIR/certs/ca.crt --api-token ${api_token} --api-mtls=false --log-level info
 Restart=always
 RestartSec=5
 StandardOutput=journal
