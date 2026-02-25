@@ -107,8 +107,8 @@ Write-Host "================================================================" -F
 Write-Host ""
 
 try {
+    $global:LASTEXITCODE = 0
     & (Join-Path $ScriptDir "install-wazuh-agent.ps1") -ApiKey $ApiKey -RegisterUrl $RegisterUrl
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Exit code: $LASTEXITCODE" }
 } catch {
     Write-Fail "Wazuh Agent installation failed: $($_.Exception.Message)"
     Write-Fail "Common issues:"
@@ -125,8 +125,8 @@ Write-Host "================================================================" -F
 Write-Host ""
 
 try {
+    $global:LASTEXITCODE = 0
     & (Join-Path $ScriptDir "install-aisac-agent.ps1")
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "Exit code: $LASTEXITCODE" }
 } catch {
     Write-Fail "AISAC Agent installation failed: $($_.Exception.Message)"
     Write-Fail "Check the error above."

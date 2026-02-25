@@ -39,7 +39,7 @@ function Get-RegisterConfig {
     $data = Get-Content $RegisterOutput -Raw | ConvertFrom-Json
 
     $script:ApiKey       = $data.aisac.api_key
-    $script:AuthToken    = $data.aisac.auth_token
+    $script:AuthToken    = if ($data.aisac.PSObject.Properties["auth_token"]) { $data.aisac.auth_token } else { "" }
     $script:AssetId      = $data.asset_id
     $script:HeartbeatUrl = $data.aisac.heartbeat_url
     $script:IngestUrl    = $data.aisac.ingest_url
@@ -247,9 +247,28 @@ function Install-Service {
     # Download NSSM if not present
     if (-not (Test-Path $nssmPath)) {
         Write-Info "Downloading NSSM (service wrapper)..."
-        $nssmUrl = "https://nssm.cc/release/nssm-2.24.zip"
         $nssmZip = "$env:TEMP\nssm.zip"
-        Invoke-WebRequest -Uri $nssmUrl -OutFile $nssmZip -UseBasicParsing
+        $nssmUrls = @(
+            "https://nssm.cc/release/nssm-2.24.zip",
+            "https://github.com/nicehash/nssm/releases/download/v2.24/nssm-2.24.zip"
+        )
+
+        $downloaded = $false
+        foreach ($nssmUrl in $nssmUrls) {
+            try {
+                Write-Info "Trying: $nssmUrl"
+                Invoke-WebRequest -Uri $nssmUrl -OutFile $nssmZip -UseBasicParsing -TimeoutSec 15
+                $downloaded = $true
+                break
+            } catch {
+                Write-Info "Failed, trying next source..."
+            }
+        }
+
+        if (-not $downloaded) {
+            Write-Fail "Failed to download NSSM from all sources"
+            exit 1
+        }
 
         Expand-Archive -Path $nssmZip -DestinationPath "$env:TEMP\nssm" -Force
         $nssmExe = Get-ChildItem "$env:TEMP\nssm" -Filter "nssm.exe" -Recurse `
@@ -263,7 +282,10 @@ function Install-Service {
     $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($existing) {
         Write-Info "Removing existing service..."
-        & $nssmPath stop $ServiceName confirm 2>$null
+        if ($existing.Status -eq "Running") {
+            Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+        }
         & $nssmPath remove $ServiceName confirm 2>$null
         Start-Sleep -Seconds 2
     }

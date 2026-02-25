@@ -153,7 +153,7 @@ serve(async (req: Request) => {
       console.error('Missing Supabase configuration');
       return new Response(JSON.stringify({ error: 'Server configuration error' }), {
         status: 500,
-        headers: { ...gFailed to insertetCorsHeaders(req), 'Content-Type': 'application/json' },
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       });
     }
 
