@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 
 	"github.com/rs/zerolog"
 
@@ -32,20 +33,9 @@ func (a *IsolateHostAction) Name() types.ActionType {
 // Validate validates the parameters.
 func (a *IsolateHostAction) Validate(params map[string]interface{}) error {
 	// allow_ips is optional but must be a valid list if provided
+	// Accepts: []string, []interface{}, or comma-separated string
 	if allowIPs, ok := params["allow_ips"]; ok {
-		var ips []string
-		switch v := allowIPs.(type) {
-		case []interface{}:
-			for _, ip := range v {
-				if ipStr, ok := ip.(string); ok {
-					ips = append(ips, ipStr)
-				}
-			}
-		case []string:
-			ips = v
-		default:
-			return fmt.Errorf("allow_ips must be a list of IP addresses, got %T", v)
-		}
+		ips := parseAllowIPs(allowIPs)
 
 		// SECURITY: Validate each IP address
 		for _, ipStr := range ips {
@@ -53,7 +43,6 @@ func (a *IsolateHostAction) Validate(params map[string]interface{}) error {
 			if ip == nil {
 				return fmt.Errorf("invalid IP address in allow_ips: %s", ipStr)
 			}
-			// Validate IP is safe (using same validation as block_ip)
 			if err := validateIPForBlocking(ip); err != nil {
 				return fmt.Errorf("invalid IP in allow_ips: %w", err)
 			}
@@ -66,12 +55,8 @@ func (a *IsolateHostAction) Validate(params map[string]interface{}) error {
 func (a *IsolateHostAction) Execute(ctx context.Context, params map[string]interface{}, actCtx types.ActionContext) (types.ActionResult, error) {
 	// Extract allowed IPs (typically includes the AISAC server IP)
 	var allowIPs []string
-	if ips, ok := params["allow_ips"].([]interface{}); ok {
-		for _, ip := range ips {
-			if ipStr, ok := ip.(string); ok {
-				allowIPs = append(allowIPs, ipStr)
-			}
-		}
+	if raw, ok := params["allow_ips"]; ok {
+		allowIPs = parseAllowIPs(raw)
 	}
 
 	a.logger.Info().
@@ -95,4 +80,31 @@ func (a *IsolateHostAction) Execute(ctx context.Context, params map[string]inter
 			"platform":  runtime.GOOS,
 		},
 	}, nil
+}
+
+// parseAllowIPs normalizes allow_ips from various input types to []string.
+// Accepts: []interface{}, []string, or comma-separated string.
+func parseAllowIPs(v interface{}) []string {
+	switch val := v.(type) {
+	case []interface{}:
+		var ips []string
+		for _, ip := range val {
+			if ipStr, ok := ip.(string); ok {
+				ips = append(ips, strings.TrimSpace(ipStr))
+			}
+		}
+		return ips
+	case []string:
+		return val
+	case string:
+		var ips []string
+		for _, ip := range strings.Split(val, ",") {
+			if trimmed := strings.TrimSpace(ip); trimmed != "" {
+				ips = append(ips, trimmed)
+			}
+		}
+		return ips
+	default:
+		return nil
+	}
 }
