@@ -97,9 +97,16 @@ func parseAllowIPs(v interface{}) []string {
 	case []string:
 		return val
 	case string:
+		// Strip brackets in case n8n sends "[ip1,ip2]" as a string
+		cleaned := strings.TrimSpace(val)
+		cleaned = strings.TrimPrefix(cleaned, "[")
+		cleaned = strings.TrimSuffix(cleaned, "]")
+		cleaned = strings.Trim(cleaned, "\"")
 		var ips []string
-		for _, ip := range strings.Split(val, ",") {
-			if trimmed := strings.TrimSpace(ip); trimmed != "" {
+		for _, ip := range strings.Split(cleaned, ",") {
+			trimmed := strings.TrimSpace(ip)
+			trimmed = strings.Trim(trimmed, "\"'")
+			if trimmed != "" {
 				ips = append(ips, trimmed)
 			}
 		}
