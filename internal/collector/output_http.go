@@ -177,15 +177,26 @@ type IngestPayload struct {
 }
 
 // preparePayload creates the JSON payload for the events.
+// For Wazuh alerts, sends the raw alert JSON with "wazuh:" prefix so that
+// syslog-ingest detects it as Wazuh source and applies proper severity mapping
+// from rule.level (instead of defaulting to info/generic_syslog).
 func (o *HTTPOutput) preparePayload(events []*LogEvent) ([]byte, error) {
-	// Convert each LogEvent to a JSON string (API expects array of strings)
 	messages := make([]string, 0, len(events))
 	for _, event := range events {
-		eventJSON, err := json.Marshal(event)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling event: %w", err)
+		var msg string
+		if event.Raw != "" && (event.Source == "wazuh_alerts" || event.Source == "wazuh") {
+			// Send raw Wazuh JSON with prefix for source detection
+			msg = "wazuh: " + event.Raw
+		} else if event.Raw != "" {
+			msg = event.Raw
+		} else {
+			eventJSON, err := json.Marshal(event)
+			if err != nil {
+				return nil, fmt.Errorf("marshaling event: %w", err)
+			}
+			msg = string(eventJSON)
 		}
-		messages = append(messages, string(eventJSON))
+		messages = append(messages, msg)
 	}
 
 	payload := IngestPayload{
@@ -258,6 +269,12 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 			Str("response_body", string(body)).
 			Msg("HTTP response received")
 	}
+
+	// Always log response summary at info level for diagnostics
+	o.logger.Info().
+		Int("status_code", resp.StatusCode).
+		Str("response", string(body)).
+		Msg("Ingest response")
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
