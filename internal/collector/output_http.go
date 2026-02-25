@@ -227,6 +227,10 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 		req.Header.Set("X-API-Key", o.cfg.APIKey)
 	}
 
+	if o.cfg.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+o.cfg.AuthToken)
+	}
+
 	if DebugCollector {
 		o.logger.Debug().
 			Str("method", "POST").
