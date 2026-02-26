@@ -56,9 +56,10 @@ $SERVER_BINARY     = "aisac-server.exe"
 
 # Default URLs
 $DEFAULT_SERVER_URL    = "wss://localhost:8443/ws"
-$DEFAULT_INGEST_URL    = "https://api.aisac.cisec.es/v1/logs"
-$DEFAULT_HEARTBEAT_URL = "https://api.aisac.cisec.es/v1/heartbeat"
-$DEFAULT_REGISTER_URL  = "https://api.aisac.cisec.es/v1/agent-webhook"
+$DEFAULT_PLATFORM_URL  = "https://api.aisac.cisec.es"
+
+# Derive platform base URL from env var or default
+$PLATFORM_URL = if ($env:AISAC_PLATFORM_URL) { $env:AISAC_PLATFORM_URL.TrimEnd('/') } else { $DEFAULT_PLATFORM_URL }
 
 # State
 $script:REGISTRATION_SUCCESS = $false
@@ -211,7 +212,7 @@ function Register-Agent {
         [string]$AgentId,
         [string]$ApiKey,
         [string]$AssetId,
-        [string]$RegisterUrl = $DEFAULT_REGISTER_URL,
+        [string]$RegisterUrl = "$PLATFORM_URL/v1/agent-webhook",
         [string]$CsApiToken  = "",
         [string]$CsUrl       = ""
     )
@@ -680,6 +681,11 @@ function Set-AgentConfiguration {
     Write-Host "    2. Asset ID - from Platform > Assets > [Your Asset] > ID" -ForegroundColor Blue
     Write-Host ""
 
+    # Platform Base URL (all API endpoints are derived from this)
+    $script:PLATFORM_URL = Read-Prompt "Platform URL" $PLATFORM_URL
+    $script:PLATFORM_URL = $script:PLATFORM_URL.TrimEnd('/')
+    Write-Host ""
+
     $script:API_KEY = Read-Prompt "API Key (format: aisac_xxxx...)"
     if ([string]::IsNullOrWhiteSpace($script:API_KEY)) {
         Write-Warn "No API Key provided. Agent will work in offline mode."
@@ -819,8 +825,8 @@ function Set-AgentConfiguration {
     Write-Host "  --- Agent Registration ---" -ForegroundColor Yellow
     Write-Host ""
 
-    # Registration URL (allow override for staging)
-    $registerUrl = if ($env:AISAC_REGISTER_URL) { $env:AISAC_REGISTER_URL } else { $DEFAULT_REGISTER_URL }
+    # All URLs derived from the same platform base URL
+    $registerUrl = "$($script:PLATFORM_URL)/v1/agent-webhook"
 
     if (($script:API_KEY -ne "aisac_your_api_key_here") -and ($script:ASSET_ID -ne "your-asset-uuid-here")) {
         if ($script:SERVER_API_TOKEN -and $script:PUBLIC_SERVER_URL) {
@@ -844,7 +850,7 @@ function Set-AgentConfiguration {
     Write-Host ""
 
     $script:COLLECTOR_ENABLED = $false
-    $script:INGEST_URL = $DEFAULT_INGEST_URL
+    $script:INGEST_URL = "$($script:PLATFORM_URL)/v1/logs"
     $script:ENABLE_WINEVT = $false
     $script:ENABLE_SYSMON = $false
     $script:ENABLE_SURICATA = $false
@@ -854,7 +860,7 @@ function Set-AgentConfiguration {
 
     if (Read-YesNo "Enable Log Collector?" "y") {
         $script:COLLECTOR_ENABLED = $true
-        $script:INGEST_URL = Read-Prompt "Log Ingest URL" $DEFAULT_INGEST_URL
+        $script:INGEST_URL = Read-Prompt "Log Ingest URL" "$($script:PLATFORM_URL)/v1/logs"
 
         Write-Host ""
         Write-Host "  --- Detected Log Sources ---" -ForegroundColor Yellow
@@ -917,11 +923,11 @@ function Set-AgentConfiguration {
     Write-Host ""
 
     $script:HEARTBEAT_ENABLED = $false
-    $script:HEARTBEAT_URL = $DEFAULT_HEARTBEAT_URL
+    $script:HEARTBEAT_URL = "$($script:PLATFORM_URL)/v1/heartbeat"
 
     if (Read-YesNo "Enable Heartbeat (recommended)?" "y") {
         $script:HEARTBEAT_ENABLED = $true
-        $script:HEARTBEAT_URL = Read-Prompt "Heartbeat URL" $DEFAULT_HEARTBEAT_URL
+        $script:HEARTBEAT_URL = Read-Prompt "Heartbeat URL" "$($script:PLATFORM_URL)/v1/heartbeat"
     }
 
     # ── Step 6: Safety ──
@@ -1007,11 +1013,11 @@ function Set-NonInteractiveConfiguration {
     $script:PUBLIC_SERVER_URL  = if ($env:AISAC_CS_URL) { $env:AISAC_CS_URL } else { "" }
     $script:INSTALL_COMMAND_SERVER = $false
     $script:GENERATE_CERTS     = $false
-    $script:INGEST_URL         = $DEFAULT_INGEST_URL
-    $script:HEARTBEAT_URL      = $DEFAULT_HEARTBEAT_URL
+    $script:INGEST_URL         = "$PLATFORM_URL/v1/logs"
+    $script:HEARTBEAT_URL      = "$PLATFORM_URL/v1/heartbeat"
 
-    # Registration URL (allow override for staging)
-    $registerUrl = if ($env:AISAC_REGISTER_URL) { $env:AISAC_REGISTER_URL } else { $DEFAULT_REGISTER_URL }
+    # All URLs derived from the same platform base URL
+    $registerUrl = "$PLATFORM_URL/v1/agent-webhook"
 
     # Registration
     if (($script:API_KEY -ne "aisac_your_api_key_here") -and ($script:ASSET_ID -ne "your-asset-uuid-here")) {
@@ -1535,15 +1541,21 @@ function Main {
         Write-Host "    AISAC_ASSET_ID     Asset ID (UUID) from AISAC Platform"
         Write-Host ""
         Write-Host "  Optional:"
+        Write-Host "    AISAC_PLATFORM_URL Platform base URL (default: https://api.aisac.cisec.es)"
         Write-Host "    AISAC_SOAR         Enable SOAR (true/false, default: false)"
         Write-Host "    AISAC_COLLECTOR    Enable Collector (true/false, default: true)"
         Write-Host "    AISAC_HEARTBEAT    Enable Heartbeat (true/false, default: true)"
         Write-Host "    AISAC_AGENT_ID     Force a specific Agent ID (overrides persisted ID)"
         Write-Host "    AISAC_CS_TOKEN     Command Server API token (for SOAR)"
         Write-Host "    AISAC_CS_URL       Command Server public URL (for SOAR)"
-        Write-Host "    AISAC_REGISTER_URL Override registration endpoint (for staging)"
         Write-Host ""
         Write-Host "Example:"
+        Write-Host '  $env:AISAC_API_KEY = "aisac_xxx"'
+        Write-Host '  $env:AISAC_ASSET_ID = "uuid-here"'
+        Write-Host "  .\install.ps1 -NonInteractive"
+        Write-Host ""
+        Write-Host "Staging example:"
+        Write-Host '  $env:AISAC_PLATFORM_URL = "https://staging-api.aisac.cisec.es"'
         Write-Host '  $env:AISAC_API_KEY = "aisac_xxx"'
         Write-Host '  $env:AISAC_ASSET_ID = "uuid-here"'
         Write-Host "  .\install.ps1 -NonInteractive"

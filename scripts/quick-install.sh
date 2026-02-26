@@ -9,6 +9,11 @@
 #   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh | \
 #     sudo AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true bash
 #
+# Staging:
+#   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh | \
+#     sudo AISAC_PLATFORM_URL=https://staging-api.aisac.cisec.es \
+#     AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true bash
+#
 
 set -e
 
@@ -112,9 +117,12 @@ if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
     export AISAC_NONINTERACTIVE
     export AISAC_API_KEY
     export AISAC_ASSET_ID
+    export AISAC_PLATFORM_URL
     export AISAC_SOAR
     export AISAC_COLLECTOR
     export AISAC_HEARTBEAT
+    export AISAC_CS_TOKEN
+    export AISAC_CS_URL
     /tmp/aisac-install.sh
 else
     echo "Run the configuration wizard:"

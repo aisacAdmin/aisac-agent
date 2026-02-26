@@ -24,11 +24,13 @@ BINARY_NAME="aisac-agent"
 
 # Default values
 DEFAULT_SERVER_URL="wss://localhost:8443/ws"
-DEFAULT_INGEST_URL="https://api.aisac.cisec.es/v1/logs"
-DEFAULT_HEARTBEAT_URL="https://api.aisac.cisec.es/v1/heartbeat"
-DEFAULT_REGISTER_URL="https://api.aisac.cisec.es/v1/agent-webhook"
+DEFAULT_PLATFORM_URL="https://api.aisac.cisec.es"
 SERVICE_WAS_RUNNING=false
 REGISTRATION_SUCCESS=false
+
+# Derive endpoint URLs from platform base URL
+# Can be overridden by AISAC_PLATFORM_URL env var
+PLATFORM_URL="${AISAC_PLATFORM_URL:-$DEFAULT_PLATFORM_URL}"
 
 #------------------------------------------------------------------------------
 # Helper functions
@@ -201,7 +203,7 @@ register_agent() {
     local agent_id="$1"
     local api_key="$2"
     local asset_id="$3"
-    local register_url="${4:-$DEFAULT_REGISTER_URL}"
+    local register_url="${4:-${PLATFORM_URL}/v1/agent-webhook}"
     # Optional: Command Server data
     local cs_api_token="${5:-}"
     local cs_url="${6:-}"
@@ -689,6 +691,12 @@ configure_agent() {
     echo -e "${BLUE}  2. Asset ID - from Platform > Assets > [Your Asset] > ID${NC}"
     echo ""
 
+    # Platform Base URL (all API endpoints are derived from this)
+    PLATFORM_URL=$(prompt "Platform URL" "$PLATFORM_URL")
+    # Strip trailing slash
+    PLATFORM_URL="${PLATFORM_URL%/}"
+    echo ""
+
     API_KEY=$(prompt "API Key (format: aisac_xxxx...)")
 
     if [ -z "$API_KEY" ]; then
@@ -822,8 +830,8 @@ configure_agent() {
     echo -e "${YELLOW}--- Agent Registration ---${NC}"
     echo ""
 
-    # Registration URL (allow override for staging)
-    local register_url="${AISAC_REGISTER_URL:-$DEFAULT_REGISTER_URL}"
+    # All URLs derived from the same platform base URL
+    local register_url="${PLATFORM_URL}/v1/agent-webhook"
 
     if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
         log_info "DEBUG registration decision: SERVER_API_TOKEN='${SERVER_API_TOKEN:0:8}...' PUBLIC_SERVER_URL='${PUBLIC_SERVER_URL}'"
@@ -850,7 +858,7 @@ configure_agent() {
     if prompt_yes_no "Enable Log Collector?" "y"; then
         COLLECTOR_ENABLED=true
 
-        INGEST_URL=$(prompt "Log Ingest URL" "$DEFAULT_INGEST_URL")
+        INGEST_URL=$(prompt "Log Ingest URL" "${PLATFORM_URL}/v1/logs")
 
         # Auto-detect and configure log sources
         echo ""
@@ -916,7 +924,7 @@ configure_agent() {
 
     if prompt_yes_no "Enable Heartbeat (recommended)?" "y"; then
         HEARTBEAT_ENABLED=true
-        HEARTBEAT_URL=$(prompt "Heartbeat URL" "$DEFAULT_HEARTBEAT_URL")
+        HEARTBEAT_URL=$(prompt "Heartbeat URL" "${PLATFORM_URL}/v1/heartbeat")
     else
         HEARTBEAT_ENABLED=false
     fi
@@ -936,7 +944,7 @@ configure_agent() {
         echo ""
         echo -e "${GREEN}Detected control plane endpoints (auto-protected):${NC}"
         [ -n "$SERVER_URL" ] && echo -e "  • Command Server: $SERVER_URL"
-        [ -n "$HEARTBEAT_URL" ] && echo -e "  • Heartbeat: ${HEARTBEAT_URL:-$DEFAULT_HEARTBEAT_URL}"
+        [ -n "$HEARTBEAT_URL" ] && echo -e "  • Heartbeat: ${HEARTBEAT_URL:-${PLATFORM_URL}/v1/heartbeat}"
         [ "$COLLECTOR_ENABLED" = "true" ] && echo -e "  • Log Ingest: $INGEST_URL"
         echo ""
 
@@ -1049,7 +1057,7 @@ callback:
 
 heartbeat:
   enabled: ${HEARTBEAT_ENABLED:-false}
-  url: "${HEARTBEAT_URL:-$DEFAULT_HEARTBEAT_URL}"
+  url: "${HEARTBEAT_URL:-${PLATFORM_URL}/v1/heartbeat}"
   api_key: "${API_KEY:-aisac_your_api_key_here}"
   asset_id: "${ASSET_ID:-your-asset-uuid-here}"
   interval: 120s
@@ -1142,8 +1150,8 @@ EOF
     fi
 
     # Extract domain from HEARTBEAT_URL
-    if [ -n "$HEARTBEAT_URL" ] || [ -n "$DEFAULT_HEARTBEAT_URL" ]; then
-        local hb_url="${HEARTBEAT_URL:-$DEFAULT_HEARTBEAT_URL}"
+    if [ -n "$HEARTBEAT_URL" ] || [ -n "${PLATFORM_URL}/v1/heartbeat" ]; then
+        local hb_url="${HEARTBEAT_URL:-${PLATFORM_URL}/v1/heartbeat}"
         local hb_host=$(echo "$hb_url" | sed -E 's|^https?://([^:/]+).*|\1|')
         if [ -n "$hb_host" ]; then
             if [ -n "$control_plane_domains" ]; then
@@ -1502,15 +1510,16 @@ uninstall() {
 #------------------------------------------------------------------------------
 
 # Environment variables for non-interactive mode:
-# AISAC_API_KEY     - API Key from AISAC Platform
-# AISAC_ASSET_ID    - Asset ID (UUID) from AISAC Platform
-# AISAC_SOAR        - Enable SOAR (true/false, default: false)
-# AISAC_COLLECTOR   - Enable Collector (true/false, default: true)
-# AISAC_HEARTBEAT   - Enable Heartbeat (true/false, default: true)
-# AISAC_AGENT_ID    - Force a specific Agent ID (optional, overrides persisted ID)
-# AISAC_CS_TOKEN    - Command Server API token (optional, for SOAR)
-# AISAC_CS_URL      - Command Server public URL (optional, for SOAR)
-# AISAC_REGISTER_URL - Override registration endpoint (optional, for staging)
+# AISAC_API_KEY      - API Key from AISAC Platform
+# AISAC_ASSET_ID     - Asset ID (UUID) from AISAC Platform
+# AISAC_PLATFORM_URL - Platform base URL (default: https://api.aisac.cisec.es)
+#                      All endpoints (heartbeat, logs, register) are derived from this.
+# AISAC_SOAR         - Enable SOAR (true/false, default: false)
+# AISAC_COLLECTOR    - Enable Collector (true/false, default: true)
+# AISAC_HEARTBEAT    - Enable Heartbeat (true/false, default: true)
+# AISAC_AGENT_ID     - Force a specific Agent ID (optional, overrides persisted ID)
+# AISAC_CS_TOKEN     - Command Server API token (optional, for SOAR)
+# AISAC_CS_URL       - Command Server public URL (optional, for SOAR)
 # AISAC_NONINTERACTIVE - Run in non-interactive mode (true/false)
 
 configure_noninteractive() {
@@ -1539,8 +1548,8 @@ configure_noninteractive() {
         PUBLIC_SERVER_URL="${AISAC_CS_URL:-}"
     fi
 
-    # Registration URL (allow override for staging)
-    local register_url="${AISAC_REGISTER_URL:-$DEFAULT_REGISTER_URL}"
+    # All URLs derived from the same platform base URL
+    local register_url="${PLATFORM_URL}/v1/agent-webhook"
 
     # Attempt registration (with CS data if SOAR enabled)
     if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
@@ -1554,8 +1563,8 @@ configure_noninteractive() {
         log_warning "Missing credentials. Set AISAC_API_KEY and AISAC_ASSET_ID environment variables."
     fi
 
-    INGEST_URL="$DEFAULT_INGEST_URL"
-    HEARTBEAT_URL="$DEFAULT_HEARTBEAT_URL"
+    INGEST_URL="${PLATFORM_URL}/v1/logs"
+    HEARTBEAT_URL="${PLATFORM_URL}/v1/heartbeat"
 
     # Auto-detect log sources
     ENABLE_SURICATA=false
@@ -1622,12 +1631,19 @@ main() {
             echo "    AISAC_ASSET_ID     Asset ID (UUID) from AISAC Platform"
             echo ""
             echo "  Optional:"
+            echo "    AISAC_PLATFORM_URL Platform base URL (default: https://api.aisac.cisec.es)"
             echo "    AISAC_SOAR         Enable SOAR (true/false, default: false)"
             echo "    AISAC_COLLECTOR    Enable Collector (true/false, default: true)"
             echo "    AISAC_HEARTBEAT    Enable Heartbeat (true/false, default: true)"
+            echo "    AISAC_CS_TOKEN     Command Server API token (for SOAR)"
+            echo "    AISAC_CS_URL       Command Server public URL (for SOAR)"
             echo ""
             echo "Example:"
             echo "  AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true ./install.sh"
+            echo ""
+            echo "Staging example:"
+            echo "  AISAC_PLATFORM_URL=https://staging-api.aisac.cisec.es AISAC_API_KEY=aisac_xxx \\"
+            echo "    AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true ./install.sh"
             echo ""
             exit 0
             ;;
