@@ -482,22 +482,44 @@ install_command_server() {
 
     log_info "Installing AISAC Command Server..."
 
-    # Compile server binary if source available
-    if [ -f "./go.mod" ] && [ -d "./cmd/server" ]; then
-        if command -v go &> /dev/null; then
-            log_info "Compiling command server from source..."
-            if go build -o "$INSTALL_DIR/aisac-server" ./cmd/server/; then
-                log_success "Command server compiled successfully"
-            else
-                log_error "Failed to compile command server"
-                return 1
-            fi
+    # Strategy 1: Compile from source if available
+    if [ -f "./go.mod" ] && [ -d "./cmd/server" ] && command -v go &> /dev/null; then
+        log_info "Compiling command server from source..."
+        if go build -o "$INSTALL_DIR/aisac-server" ./cmd/server/; then
+            log_success "Command server compiled successfully"
         else
-            log_error "Go is required to compile the command server"
+            log_error "Failed to compile command server from source"
+            return 1
+        fi
+    # Strategy 2: Use local pre-built binary
+    elif [ -f "$INSTALL_DIR/aisac-server" ]; then
+        log_info "Using existing command server binary at $INSTALL_DIR/aisac-server"
+    # Strategy 3: Download pre-built binary from GitHub Releases
+    elif command -v curl &> /dev/null; then
+        log_info "Downloading command server binary from GitHub Releases..."
+        local arch=$(uname -m)
+        case $arch in
+            x86_64)  arch="amd64" ;;
+            aarch64) arch="arm64" ;;
+            armv7l)  arch="arm" ;;
+        esac
+        local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+        local repo="CISECSL/aisac-agent"
+        local latest=""
+        latest=$(curl -fs "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        local version="${latest:-v1.0.5}"
+        local download_url="https://github.com/${repo}/releases/download/${version}/aisac-server-${os}-${arch}"
+
+        log_info "Downloading from: ${download_url}"
+        if curl -fsSL -o "$INSTALL_DIR/aisac-server" "$download_url"; then
+            log_success "Command server binary downloaded (${version})"
+        else
+            log_error "Failed to download command server binary"
+            log_info "URL: $download_url"
             return 1
         fi
     else
-        log_error "Source code not found. Cannot compile command server."
+        log_error "Cannot install command server: no source code, no local binary, and curl not available"
         return 1
     fi
 
@@ -1543,12 +1565,53 @@ configure_noninteractive() {
 
     SERVER_URL="$DEFAULT_SERVER_URL"
     TLS_ENABLED=false
+    GENERATE_CERTS=false
+    GENERATE_SERVER_CERTS=false
+    INSTALL_COMMAND_SERVER=false
     SERVER_API_TOKEN=""
     PUBLIC_SERVER_URL=""
+    SERVER_HOSTNAME=""
+
     if [ "$SOAR_ENABLED" = "true" ]; then
         TLS_ENABLED=true
         SERVER_API_TOKEN="${AISAC_CS_TOKEN:-}"
         PUBLIC_SERVER_URL="${AISAC_CS_URL:-}"
+
+        # Auto-generate token if not provided
+        if [ -z "$SERVER_API_TOKEN" ]; then
+            # Reuse existing token if available
+            if [ -f "$CONFIG_DIR/server-api-token" ]; then
+                SERVER_API_TOKEN=$(cat "$CONFIG_DIR/server-api-token" 2>/dev/null | tr -d '[:space:]')
+                log_info "Reusing existing Command Server API token"
+            fi
+            # Generate new token if still empty
+            if [ -z "$SERVER_API_TOKEN" ]; then
+                SERVER_API_TOKEN=$(generate_api_token "")
+                log_info "Generated new Command Server API token"
+            fi
+        fi
+
+        # Auto-detect public URL if not provided
+        if [ -z "$PUBLIC_SERVER_URL" ]; then
+            local detected_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || hostname -I 2>/dev/null | awk '{print $1}')
+            if [ -n "$detected_ip" ]; then
+                PUBLIC_SERVER_URL="https://${detected_ip}:8443"
+                log_info "Auto-detected public CS URL: ${PUBLIC_SERVER_URL}"
+            fi
+        fi
+
+        # Install Command Server locally (download binary if needed)
+        INSTALL_COMMAND_SERVER=true
+        SERVER_HOSTNAME="localhost"
+
+        # Generate certs if they don't already exist
+        if [ ! -f "$CONFIG_DIR/certs/agent.crt" ] || [ ! -f "$CONFIG_DIR/certs/ca.crt" ]; then
+            GENERATE_CERTS=true
+            GENERATE_SERVER_CERTS=true
+            log_info "Certificates not found — will generate automatically"
+        else
+            log_info "Existing certificates found in $CONFIG_DIR/certs/"
+        fi
     fi
 
     # All URLs derived from the same platform base URL
