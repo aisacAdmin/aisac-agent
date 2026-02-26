@@ -212,7 +212,7 @@ function Register-Agent {
         [string]$AgentId,
         [string]$ApiKey,
         [string]$AssetId,
-        [string]$RegisterUrl = "$PLATFORM_URL/v1/agent-webhook",
+        [string]$RegisterUrl = "$PLATFORM_URL/v1/webhooks/agent-connected",
         [string]$CsApiToken  = "",
         [string]$CsUrl       = ""
     )
@@ -826,7 +826,7 @@ function Set-AgentConfiguration {
     Write-Host ""
 
     # All URLs derived from the same platform base URL
-    $registerUrl = "$($script:PLATFORM_URL)/v1/agent-webhook"
+    $registerUrl = "$($script:PLATFORM_URL)/v1/webhooks/agent-connected"
 
     if (($script:API_KEY -ne "aisac_your_api_key_here") -and ($script:ASSET_ID -ne "your-asset-uuid-here")) {
         if ($script:SERVER_API_TOKEN -and $script:PUBLIC_SERVER_URL) {
@@ -1017,7 +1017,7 @@ function Set-NonInteractiveConfiguration {
     $script:HEARTBEAT_URL      = "$PLATFORM_URL/v1/heartbeat"
 
     # All URLs derived from the same platform base URL
-    $registerUrl = "$PLATFORM_URL/v1/agent-webhook"
+    $registerUrl = "$PLATFORM_URL/v1/webhooks/agent-connected"
 
     # Registration
     if (($script:API_KEY -ne "aisac_your_api_key_here") -and ($script:ASSET_ID -ne "your-asset-uuid-here")) {
@@ -1145,7 +1145,7 @@ heartbeat:
 
 registration:
   enabled: true
-  url: "$($script:PLATFORM_URL)/v1/agent-webhook"
+  url: "$($script:PLATFORM_URL)/v1/webhooks/agent-connected"
   api_key: "$($script:API_KEY)"
   asset_id: "$($script:ASSET_ID)"
   command_server_url: "$($script:PUBLIC_SERVER_URL)"

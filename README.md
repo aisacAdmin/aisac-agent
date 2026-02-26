@@ -637,7 +637,7 @@ callback:
 | **Collector** | | |
 | `AISAC_COLLECTOR_API_KEY` | Collector API key | `aisac_xxxx...` |
 | **Installer** | | |
-| `AISAC_REGISTER_URL` | Override registration endpoint (staging) | `https://staging.api.aisac.cisec.es/v1/agent-webhook` |
+| `AISAC_REGISTER_URL` | Override registration endpoint (staging) | `https://staging-api.aisac.cisec.es/v1/webhooks/agent-connected` |
 | `AISAC_NONINTERACTIVE` | Run installer in non-interactive mode | `true` |
 
 ---

@@ -206,7 +206,7 @@ register_agent() {
     local agent_id="$1"
     local api_key="$2"
     local asset_id="$3"
-    local register_url="${4:-${PLATFORM_URL}/v1/agent-webhook}"
+    local register_url="${4:-${PLATFORM_URL}/v1/webhooks/agent-connected}"
     # Optional: Command Server data
     local cs_api_token="${5:-}"
     local cs_url="${6:-}"
@@ -877,7 +877,7 @@ configure_agent() {
     echo ""
 
     # All URLs derived from the same platform base URL
-    local register_url="${PLATFORM_URL}/v1/agent-webhook"
+    local register_url="${PLATFORM_URL}/v1/webhooks/agent-connected"
 
     if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
         log_info "DEBUG registration decision: SERVER_API_TOKEN='${SERVER_API_TOKEN:0:8}...' PUBLIC_SERVER_URL='${PUBLIC_SERVER_URL}'"
@@ -1112,7 +1112,7 @@ heartbeat:
 
 registration:
   enabled: true
-  url: "${PLATFORM_URL}/v1/agent-webhook"
+  url: "${PLATFORM_URL}/v1/webhooks/agent-connected"
   api_key: "${API_KEY:-aisac_your_api_key_here}"
   asset_id: "${ASSET_ID:-your-asset-uuid-here}"
   command_server_url: "${PUBLIC_SERVER_URL:-}"
@@ -1644,7 +1644,7 @@ configure_noninteractive() {
     fi
 
     # All URLs derived from the same platform base URL
-    local register_url="${PLATFORM_URL}/v1/agent-webhook"
+    local register_url="${PLATFORM_URL}/v1/webhooks/agent-connected"
 
     # Attempt registration (with CS data if SOAR enabled)
     if [ "$API_KEY" != "aisac_your_api_key_here" ] && [ "$ASSET_ID" != "your-asset-uuid-here" ]; then
