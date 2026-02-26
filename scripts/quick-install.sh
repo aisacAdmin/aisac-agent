@@ -57,11 +57,12 @@ echo -e "${GREEN}[1/5]${NC} Detecting system: ${OS}/${ARCH}"
 
 # Get latest release
 echo -e "${GREEN}[2/5]${NC} Fetching latest release..."
-LATEST=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+LATEST=$(curl -fs "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [ -z "$LATEST" ]; then
-    echo -e "${RED}Failed to get latest release. Using main branch...${NC}"
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v1.0.0/${BINARY_NAME}-${OS}-${ARCH}"
+    echo -e "${YELLOW}Could not fetch latest release. Using fallback version...${NC}"
+    LATEST="v1.0.4"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY_NAME}-${OS}-${ARCH}"
 else
     echo "Latest version: $LATEST"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY_NAME}-${OS}-${ARCH}"
@@ -74,18 +75,29 @@ mkdir -p "$CONFIG_DIR"
 mkdir -p /var/lib/aisac
 mkdir -p /var/log/aisac
 
-# Download binary
+# Stop running agent (binary cannot be overwritten while running)
+if systemctl is-active --quiet aisac-agent 2>/dev/null; then
+    echo -e "${YELLOW}Stopping running agent...${NC}"
+    systemctl stop aisac-agent 2>/dev/null || true
+fi
+
+# Download binary to temp file first, then move into place
 echo -e "${GREEN}[4/5]${NC} Downloading AISAC Agent..."
-if ! curl -sSL -o "$INSTALL_DIR/$BINARY_NAME" "$DOWNLOAD_URL"; then
+TMPFILE=$(mktemp /tmp/aisac-agent-XXXXXX)
+if ! curl -fsSL -o "$TMPFILE" "$DOWNLOAD_URL"; then
+    rm -f "$TMPFILE"
     echo -e "${RED}Download failed. Please check your internet connection.${NC}"
+    echo "  URL: $DOWNLOAD_URL"
     exit 1
 fi
+rm -f "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
+mv "$TMPFILE" "$INSTALL_DIR/$BINARY_NAME"
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 ln -sf "$INSTALL_DIR/$BINARY_NAME" /usr/local/bin/$BINARY_NAME
 
 # Download full installer
 echo -e "${GREEN}[5/5]${NC} Downloading configuration wizard..."
-curl -sSL -o /tmp/aisac-install.sh "https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
+curl -fsSL -o /tmp/aisac-install.sh "https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
 chmod +x /tmp/aisac-install.sh
 
 echo ""
