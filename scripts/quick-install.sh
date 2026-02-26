@@ -66,7 +66,7 @@ LATEST=$(curl -fs "https://api.github.com/repos/${REPO}/releases/latest" | grep 
 
 if [ -z "$LATEST" ]; then
     echo -e "${YELLOW}Could not fetch latest release. Using fallback version...${NC}"
-    LATEST="v1.0.4"
+    LATEST="v1.0.5"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY_NAME}-${OS}-${ARCH}"
 else
     echo "Latest version: $LATEST"

@@ -267,7 +267,7 @@ CSEOF
         "arch": "${arch}",
         "kernel": "${kernel}",
         "ip_address": "${ip_address}",
-        "version": "1.0.1",
+        "version": "1.0.5",
         "capabilities": ${capabilities}
     }${cs_fields}
 }
@@ -663,7 +663,12 @@ install_binary() {
                 ;;
         esac
 
-        local download_url="https://github.com/CISECSL/aisac-agent/releases/download/v1.0.1/aisac-agent-${os}-${arch}"
+        # Fetch latest release version from GitHub API, fallback to hardcoded
+        local repo="CISECSL/aisac-agent"
+        local latest=""
+        latest=$(curl -fs "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        local version="${latest:-v1.0.5}"
+        local download_url="https://github.com/${repo}/releases/download/${version}/aisac-agent-${os}-${arch}"
 
         log_info "Downloading from: $download_url"
 
