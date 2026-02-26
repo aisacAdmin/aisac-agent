@@ -8,7 +8,7 @@
 // Expected headers:
 //   X-API-Key: aisac_xxxxxxxxxxxx
 //
-// Response:
+// GET Response:
 //   {
 //     "tenant_id": "uuid",
 //     "asset_id": "uuid",
@@ -24,6 +24,19 @@
 //       "api_key": "aisac_xxx"
 //     }
 //   }
+//
+// PATCH - Update integration_config after Wazuh agent installation
+// Headers:
+//   X-API-Key: aisac_xxxxxxxxxxxx
+// Body:
+//   {
+//     "integration_type": "wazuh",
+//     "integration_config": {
+//       "wazuh_agent_name": "wazuh-aisac-staging-linux",
+//       "wazuh_agent_id": "002",
+//       "collector_asset_id": "uuid-of-wazuh-manager"
+//     }
+//   }
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -31,7 +44,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-api-key, content-type",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, PATCH, OPTIONS",
 };
 
 function extractApiKey(req: Request): string | null {
@@ -55,7 +68,7 @@ serve(async (req: Request) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  if (req.method !== "GET") {
+  if (req.method !== "GET" && req.method !== "PATCH") {
     return new Response(
       JSON.stringify({ error: "Method not allowed" }),
       { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -116,6 +129,45 @@ serve(async (req: Request) => {
     }
 
     const { asset_id, tenant_id, asset_name } = validationResult;
+
+    // ─── PATCH: Update integration_config after Wazuh agent installation ───
+    if (req.method === "PATCH") {
+      const body = await req.json();
+      const { integration_type, integration_config } = body;
+
+      if (!integration_type || !integration_config) {
+        return new Response(
+          JSON.stringify({ error: "Missing integration_type or integration_config" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { error: updateError } = await supabase
+        .from("monitored_assets")
+        .update({
+          integration_type,
+          integration_config,
+        })
+        .eq("id", asset_id)
+        .eq("tenant_id", tenant_id);
+
+      if (updateError) {
+        console.error("Failed to update integration_config:", updateError.message);
+        return new Response(
+          JSON.stringify({ error: "Failed to update integration config" }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      console.log(`Updated integration_config for asset ${asset_id}: ${JSON.stringify(integration_config)}`);
+
+      return new Response(
+        JSON.stringify({ success: true, asset_id, integration_type, integration_config }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ─── GET: Return full config for the install script ───
 
     // 4. Get Wazuh Manager config from environment
     const wazuhManagerIp = Deno.env.get("WAZUH_MANAGER_IP");

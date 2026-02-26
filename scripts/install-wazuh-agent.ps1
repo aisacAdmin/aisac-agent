@@ -51,6 +51,36 @@ function Invoke-Register {
 }
 
 #------------------------------------------------------------------------------
+# Update integration_config in platform (PATCH agent-register)
+#------------------------------------------------------------------------------
+
+function Update-IntegrationConfig {
+    param($AgentName, $AgentId)
+
+    Write-Info "Updating integration_config in platform..."
+
+    $body = @{
+        integration_type = "wazuh"
+        integration_config = @{
+            wazuh_agent_name = $AgentName
+            wazuh_agent_id = $AgentId
+        }
+    } | ConvertTo-Json -Depth 5
+
+    try {
+        Invoke-RestMethod `
+            -Uri $RegisterUrl `
+            -Method PATCH `
+            -Headers @{ "X-API-Key" = $ApiKey; "Content-Type" = "application/json" } `
+            -Body $body
+        Write-Ok "integration_config updated (agent_name=$AgentName, agent_id=$AgentId)"
+    } catch {
+        Write-Fail "Failed to update integration_config: $($_.Exception.Message)"
+        Write-Info "This is non-fatal. The agent is installed but asset routing may not work."
+    }
+}
+
+#------------------------------------------------------------------------------
 # Install Wazuh Agent
 #------------------------------------------------------------------------------
 
@@ -133,5 +163,19 @@ Write-Info "Asset name: $assetName"
 # 3. Install Wazuh Agent
 Install-WazuhAgent -ManagerIp $managerIp -ManagerPort $managerPort `
     -AgentGroup $agentGroup -AgentName $assetName
+
+# 4. Get Wazuh agent ID assigned by the Manager
+$wazuhAgentId = ""
+$clientKeysPath = "C:\Program Files (x86)\ossec-agent\client.keys"
+if (Test-Path $clientKeysPath) {
+    $firstLine = Get-Content $clientKeysPath -TotalCount 1
+    if ($firstLine -match "^(\d+)\s") {
+        $wazuhAgentId = $Matches[1]
+        Write-Info "Wazuh agent ID: $wazuhAgentId"
+    }
+}
+
+# 5. Update integration_config in platform so syslog-ingest can route by agent name
+Update-IntegrationConfig -AgentName $assetName -AgentId $wazuhAgentId
 
 Write-Ok "Wazuh Agent installed -> Manager: $managerIp | Group: $agentGroup"

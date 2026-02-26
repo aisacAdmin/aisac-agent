@@ -83,6 +83,46 @@ call_register() {
 }
 
 #------------------------------------------------------------------------------
+# Update integration_config in platform (PATCH agent-register)
+#------------------------------------------------------------------------------
+
+update_integration_config() {
+    local api_key="$1"
+    local register_url="$2"
+    local agent_name="$3"
+    local agent_id="$4"
+
+    log_info "Updating integration_config in platform..."
+
+    local payload
+    payload=$(cat <<EOJSON
+{
+  "integration_type": "wazuh",
+  "integration_config": {
+    "wazuh_agent_name": "${agent_name}",
+    "wazuh_agent_id": "${agent_id}"
+  }
+}
+EOJSON
+)
+
+    local response http_code
+    response=$(curl -s -w "\n%{http_code}" -X PATCH "${register_url}" \
+        -H "X-API-Key: ${api_key}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" 2>/dev/null)
+    http_code=$(echo "$response" | tail -n1)
+    response=$(echo "$response" | sed '$d')
+
+    if [ "$http_code" = "200" ]; then
+        log_success "integration_config updated (agent_name=${agent_name}, agent_id=${agent_id})"
+    else
+        log_error "Failed to update integration_config (HTTP ${http_code}): ${response}"
+        log_info "This is non-fatal. The agent is installed but asset routing may not work."
+    fi
+}
+
+#------------------------------------------------------------------------------
 # Detect distro
 #------------------------------------------------------------------------------
 
@@ -216,6 +256,16 @@ main() {
 
     # 4. Install Wazuh Agent
     install_wazuh_agent "$manager_ip" "${manager_port:-1514}" "$agent_group" "$asset_name"
+
+    # 5. Get the Wazuh agent ID assigned by the Manager
+    local wazuh_agent_id=""
+    if [ -f /var/ossec/etc/client.keys ]; then
+        wazuh_agent_id=$(awk '{print $1; exit}' /var/ossec/etc/client.keys)
+        log_info "Wazuh agent ID: ${wazuh_agent_id}"
+    fi
+
+    # 6. Update integration_config in platform so syslog-ingest can route by agent name
+    update_integration_config "$api_key" "$register_url" "$asset_name" "$wazuh_agent_id"
 
     log_success "Wazuh Agent installed → Manager: ${manager_ip} | Group: ${agent_group}"
 }
