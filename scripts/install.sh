@@ -511,9 +511,16 @@ install_command_server() {
         local download_url="https://github.com/${repo}/releases/download/${version}/aisac-server-${os}-${arch}"
 
         log_info "Downloading from: ${download_url}"
-        if curl -fsSL -o "$INSTALL_DIR/aisac-server" "$download_url"; then
+        local tmpfile
+        tmpfile=$(mktemp /tmp/aisac-server-XXXXXX)
+        if curl -fsSL -o "$tmpfile" "$download_url"; then
+            # Stop running server before replacing binary
+            systemctl stop aisac-server 2>/dev/null || true
+            rm -f "$INSTALL_DIR/aisac-server" 2>/dev/null || true
+            mv "$tmpfile" "$INSTALL_DIR/aisac-server"
             log_success "Command server binary downloaded (${version})"
         else
+            rm -f "$tmpfile"
             log_error "Failed to download command server binary"
             log_info "URL: $download_url"
             return 1
@@ -672,8 +679,14 @@ install_binary() {
 
         log_info "Downloading from: $download_url"
 
+        # Download to temp file first, then move into place
+        # (avoids curl error 23 when binary is still running)
+        local tmpfile
+        tmpfile=$(mktemp /tmp/aisac-agent-XXXXXX)
+
         if command -v curl &> /dev/null; then
-            if ! curl -fsSL "$download_url" -o "$INSTALL_DIR/$BINARY_NAME"; then
+            if ! curl -fsSL "$download_url" -o "$tmpfile"; then
+                rm -f "$tmpfile"
                 log_error "Failed to download binary from GitHub Releases"
                 echo ""
                 echo "Options:"
@@ -684,7 +697,8 @@ install_binary() {
                 exit 1
             fi
         elif command -v wget &> /dev/null; then
-            if ! wget -q "$download_url" -O "$INSTALL_DIR/$BINARY_NAME"; then
+            if ! wget -q "$download_url" -O "$tmpfile"; then
+                rm -f "$tmpfile"
                 log_error "Failed to download binary from GitHub Releases"
                 exit 1
             fi
@@ -693,6 +707,8 @@ install_binary() {
             exit 1
         fi
 
+        rm -f "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
+        mv "$tmpfile" "$INSTALL_DIR/$BINARY_NAME"
         log_success "Binary downloaded successfully"
     fi
 

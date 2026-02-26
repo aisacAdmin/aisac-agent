@@ -125,13 +125,7 @@ if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
     export AISAC_CS_URL
     /tmp/aisac-install.sh
 else
-    echo "Run the configuration wizard:"
-    echo -e "  ${CYAN}sudo /tmp/aisac-install.sh${NC}"
+    echo -e "${GREEN}Launching configuration wizard...${NC}"
     echo ""
-    echo "Or for automated deployment:"
-    echo -e "  ${CYAN}sudo AISAC_API_KEY=xxx AISAC_ASSET_ID=uuid AISAC_NONINTERACTIVE=true /tmp/aisac-install.sh${NC}"
-    echo ""
-    echo "Or configure manually:"
-    echo -e "  ${CYAN}nano ${CONFIG_DIR}/agent.yaml${NC}"
-    echo ""
+    /tmp/aisac-install.sh
 fi
