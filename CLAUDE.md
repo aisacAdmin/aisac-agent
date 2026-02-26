@@ -231,7 +231,7 @@ collector:
 
 | Variable | Description |
 |----------|-------------|
-| `AISAC_AGENT_ID` | Agent ID (auto-generated if empty) |
+| `AISAC_AGENT_ID` | Force a specific Agent ID (overrides persisted ID) |
 | `AISAC_SERVER_URL` | Command server URL (SOAR mode) |
 | `AISAC_CERT_FILE` | Path to agent certificate |
 | `AISAC_KEY_FILE` | Path to private key |
@@ -240,3 +240,6 @@ collector:
 | `AISAC_HEARTBEAT_API_KEY` | Heartbeat API key |
 | `AISAC_HEARTBEAT_ASSET_ID` | Asset UUID from platform |
 | `AISAC_COLLECTOR_API_KEY` | Collector API key |
+| `AISAC_CS_TOKEN` | Command Server API token (for SOAR) |
+| `AISAC_CS_URL` | Command Server public URL (for SOAR) |
+| `AISAC_REGISTER_URL` | Override registration endpoint (for staging) |
