@@ -14,15 +14,42 @@ It can be deployed on endpoints and servers in multiple operating modes dependin
 
 ---
 
+## Quick Install
+
+### Linux (one command)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh \
+  -o /tmp/quick-install.sh && sudo bash /tmp/quick-install.sh
+```
+
+This downloads the latest release binary and launches the configuration wizard.
+
+### From source (requires Go 1.21+)
+
+```bash
+git clone https://github.com/CISECSL/aisac-agent.git
+cd aisac-agent
+sudo ./scripts/install.sh
+```
+
+### Prerequisites
+
+Before installing you need from the AISAC dashboard:
+- **API Key** (`aisac_xxxx...`) — Dashboard > Assets > API Key
+- **Asset ID** (UUID) — Dashboard > Assets > ID
+
+> For the full step-by-step guide with all options, see **[docs/INSTALL.md](docs/INSTALL.md)**
+
+---
+
 ## Table of Contents
 
+- [Quick Install](#quick-install)
 - [Overview](#overview)
 - [Operating Modes](#operating-modes)
 - [Architecture](#architecture)
 - [Features](#features)
-- [Quick Start](#quick-start)
-  - [Quick Install (Linux)](#quick-install-linux)
-  - [Manual Installation](#manual-installation)
 - [Configuration](#configuration)
   - [Agent Configuration](#agent-configuration)
   - [Heartbeat Configuration](#heartbeat-configuration)
@@ -368,34 +395,7 @@ collector:
 
 ---
 
-## Quick Start
-
-### Quick Install (Linux)
-
-The easiest way to install AISAC Agent on Linux:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install.sh | sudo bash
-```
-
-The installer will:
-1. Download the latest release binary
-2. Create configuration directory (`/etc/aisac/`)
-3. Prompt for configuration (Agent ID, API keys, etc.)
-4. Install and start the systemd service
-
-**Post-install**: Edit `/etc/aisac/agent.yaml` to enable additional features or adjust settings.
-
-### Manual Installation
-
-#### Prerequisites
-
-- Go 1.21 or higher (for building from source)
-- OpenSSL (for certificate generation, only if using SOAR mode)
-- Root/Administrator privileges (for running agents)
-- Linux, Windows, or macOS
-
-#### Build from Source
+## Build from Source
 
 ```bash
 git clone https://github.com/CISECSL/aisac-agent.git
@@ -408,92 +408,7 @@ This creates:
 - `build/aisac-agent` - Agent binary
 - `build/aisac-server` - Command server binary
 
-#### Download Pre-built Binary
-
-```bash
-# Linux amd64
-curl -Lo aisac-agent https://github.com/CISECSL/aisac-agent/releases/latest/download/aisac-agent-linux-amd64
-chmod +x aisac-agent
-sudo mv aisac-agent /usr/local/bin/
-```
-
-### Generate Certificates (SOAR Mode Only)
-
-For SOAR mode with mTLS, generate certificates:
-
-```bash
-make gen-certs
-# or
-./scripts/gen-certs.sh
-```
-
-This generates:
-- `certs/ca.crt` - Certificate Authority
-- `certs/ca.key` - CA private key
-- `certs/server.crt` - Server certificate
-- `certs/server.key` - Server private key
-- `certs/agent.crt` - Agent certificate
-- `certs/agent.key` - Agent private key
-
-**Note**: Certificates are NOT required for heartbeat-only or collector modes.
-
-### Run the Command Server (SOAR Mode Only)
-
-```bash
-./build/aisac-server \
-  --listen :8443 \
-  --cert certs/server.crt \
-  --key certs/server.key \
-  --ca certs/ca.crt \
-  --api-token YOUR_SECURE_TOKEN_HERE \
-  --log-level info
-```
-
-**Server Flags:**
-| Flag | Description |
-|------|-------------|
-| `--listen` | Address and port to listen on (default: `:8443`) |
-| `--cert` | Path to server certificate |
-| `--key` | Path to server private key |
-| `--ca` | Path to CA certificate for client verification |
-| `--api-token` | Bearer token for REST API authentication |
-| `--api-mtls` | Require mTLS for REST API (default: true, disable for n8n) |
-| `--log-level` | Logging level: debug, info, warn, error |
-
-#### Agent Registration with Command Server Data
-
-The installer registers the agent with the platform via `POST /v1/agent-webhook`, including Command Server connection details when SOAR is enabled. This allows the platform to store the CS API token for SOAR workflows — using a single per-asset API key instead of requiring a separate `PLATFORM_API_KEY`.
-
-See [docs/platform-webhook.md](docs/platform-webhook.md) for detailed registration documentation.
-
-### Run the Agent
-
-#### Heartbeat-Only Mode (Simplest)
-```bash
-sudo aisac-agent --config /etc/aisac/agent.yaml
-```
-
-With minimal config:
-```yaml
-server:
-  enabled: false
-
-heartbeat:
-  enabled: true
-  url: "https://api.aisac.cisec.es/v1/heartbeat"
-  api_key: "aisac_your_api_key"
-  asset_id: "your-asset-uuid"
-```
-
-#### SOAR Mode
-```bash
-export AISAC_SERVER_URL="wss://your-server:8443/ws"
-export AISAC_CERT_FILE="/etc/aisac/certs/agent.crt"
-export AISAC_KEY_FILE="/etc/aisac/certs/agent.key"
-export AISAC_CA_FILE="/etc/aisac/certs/ca.crt"
-
-sudo aisac-agent --config /etc/aisac/agent.yaml
-```
+For detailed installation, configuration, and deployment instructions see **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ---
 
