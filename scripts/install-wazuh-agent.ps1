@@ -51,7 +51,7 @@ function Invoke-Register {
 }
 
 #------------------------------------------------------------------------------
-# Update integration_config in platform (PATCH agent-register)
+# Update integration_config in platform (PATCH install-config)
 #------------------------------------------------------------------------------
 
 function Update-IntegrationConfig {

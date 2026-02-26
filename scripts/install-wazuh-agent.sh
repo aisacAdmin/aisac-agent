@@ -83,7 +83,7 @@ call_register() {
 }
 
 #------------------------------------------------------------------------------
-# Update integration_config in platform (PATCH agent-register)
+# Update integration_config in platform (PATCH install-config)
 #------------------------------------------------------------------------------
 
 update_integration_config() {
