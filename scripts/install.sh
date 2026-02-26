@@ -504,7 +504,7 @@ install_command_server() {
     cat > /etc/systemd/system/aisac-server.service << EOF
 [Unit]
 Description=AISAC Command Server (SOAR)
-Documentation=https://github.com/aisacAdmin/aisac-agent
+Documentation=https://github.com/CISECSL/aisac-agent
 After=network.target
 
 [Service]
@@ -636,7 +636,7 @@ install_binary() {
                 ;;
         esac
 
-        local download_url="https://github.com/aisacAdmin/aisac-agent/releases/download/v1.0.1/aisac-agent-${os}-${arch}"
+        local download_url="https://github.com/CISECSL/aisac-agent/releases/download/v1.0.1/aisac-agent-${os}-${arch}"
 
         log_info "Downloading from: $download_url"
 
@@ -645,7 +645,7 @@ install_binary() {
                 log_error "Failed to download binary from GitHub Releases"
                 echo ""
                 echo "Options:"
-                echo "  1. Check if releases exist at: https://github.com/aisacAdmin/aisac-agent/releases"
+                echo "  1. Check if releases exist at: https://github.com/CISECSL/aisac-agent/releases"
                 echo "  2. Build locally with: make build"
                 echo "  3. Or compile for Linux with:"
                 echo "     GOOS=linux GOARCH=amd64 go build -o aisac-agent ./cmd/agent"
@@ -1243,7 +1243,7 @@ install_systemd_service() {
     cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=AISAC Security Agent
-Documentation=https://github.com/aisacAdmin/aisac-agent
+Documentation=https://github.com/CISECSL/aisac-agent
 After=network-online.target
 Wants=network-online.target
 
@@ -1383,7 +1383,7 @@ print_summary() {
     echo -e "    2. Check status:   ${CYAN}systemctl status ${SERVICE_NAME}${NC}"
     echo -e "    3. Watch logs:     ${CYAN}tail -f ${LOG_DIR}/agent.log${NC}"
     echo ""
-    echo -e "  ${BLUE}Documentation: https://github.com/aisacAdmin/aisac-agent${NC}"
+    echo -e "  ${BLUE}Documentation: https://github.com/CISECSL/aisac-agent${NC}"
     echo ""
 }
 

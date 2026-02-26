@@ -30,7 +30,7 @@ The fastest way to deploy AISAC Agent on Linux.
 ### One-Line Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install.sh | sudo bash
 ```
 
 The installer will:
@@ -188,7 +188,7 @@ The AISAC Agent communicates with the AISAC Platform through a reverse proxy for
 For automated deployments (CI/CD, Ansible, etc.):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/quick-install.sh | \
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh | \
   sudo AISAC_API_KEY=aisac_xxx \
        AISAC_ASSET_ID=uuid-here \
        AISAC_NONINTERACTIVE=true \
@@ -1145,7 +1145,7 @@ logging:
 
 ```bash
 # Install using quick install
-curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install.sh | sudo bash
 
 # Edit configuration for heartbeat-only mode
 sudo nano /etc/aisac/agent.yaml
@@ -1283,7 +1283,7 @@ logging:
 
 ```bash
 # Install agent
-curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install.sh | sudo bash
 
 # Configure for collector mode
 sudo nano /etc/aisac/agent.yaml

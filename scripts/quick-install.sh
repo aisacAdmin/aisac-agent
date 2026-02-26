@@ -3,16 +3,16 @@
 # AISAC Agent Quick Installer v1.1
 #
 # Interactive mode:
-#   curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/quick-install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh | sudo bash
 #
 # Non-interactive mode (for automation):
-#   curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/quick-install.sh | \
+#   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh | \
 #     sudo AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true bash
 #
 
 set -e
 
-REPO="aisacAdmin/aisac-agent"
+REPO="CISECSL/aisac-agent"
 INSTALL_DIR="/opt/aisac"
 CONFIG_DIR="/etc/aisac"
 BINARY_NAME="aisac-agent"

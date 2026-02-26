@@ -375,7 +375,7 @@ collector:
 The easiest way to install AISAC Agent on Linux:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Baxistart/aisac-agent/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install.sh | sudo bash
 ```
 
 The installer will:
@@ -398,7 +398,7 @@ The installer will:
 #### Build from Source
 
 ```bash
-git clone https://github.com/Baxistart/aisac-agent.git
+git clone https://github.com/CISECSL/aisac-agent.git
 cd aisac-agent
 make deps
 make build
@@ -412,7 +412,7 @@ This creates:
 
 ```bash
 # Linux amd64
-curl -Lo aisac-agent https://github.com/Baxistart/aisac-agent/releases/latest/download/aisac-agent-linux-amd64
+curl -Lo aisac-agent https://github.com/CISECSL/aisac-agent/releases/latest/download/aisac-agent-linux-amd64
 chmod +x aisac-agent
 sudo mv aisac-agent /usr/local/bin/
 ```

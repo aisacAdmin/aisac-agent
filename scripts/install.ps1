@@ -635,7 +635,7 @@ function Install-Binary {
     if (-not $installed) {
         Write-Info "Downloading binary from GitHub Releases..."
         $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-        $downloadUrl = "https://github.com/aisacAdmin/aisac-agent/releases/download/v1.0.1/aisac-agent-windows-${arch}.exe"
+        $downloadUrl = "https://github.com/CISECSL/aisac-agent/releases/download/v1.0.1/aisac-agent-windows-${arch}.exe"
 
         Write-Info "Downloading from: $downloadUrl"
         try {
@@ -647,7 +647,7 @@ function Install-Binary {
             Write-Err "Failed to download binary from GitHub Releases"
             Write-Host ""
             Write-Host "  Options:" -ForegroundColor Yellow
-            Write-Host "    1. Check releases at: https://github.com/aisacAdmin/aisac-agent/releases"
+            Write-Host "    1. Check releases at: https://github.com/CISECSL/aisac-agent/releases"
             Write-Host "    2. Cross-compile with: `$env:GOOS='windows'; go build -o aisac-agent.exe ./cmd/agent"
             exit 1
         }
@@ -1449,7 +1449,7 @@ function Write-Summary {
     Write-Host "      2. Check status:   Get-Service $SERVICE_NAME" -ForegroundColor Cyan
     Write-Host "      3. Watch logs:     Get-Content '$LOG_DIR\agent.log' -Tail 50 -Wait" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "    Documentation: https://github.com/aisacAdmin/aisac-agent" -ForegroundColor Blue
+    Write-Host "    Documentation: https://github.com/CISECSL/aisac-agent" -ForegroundColor Blue
     Write-Host ""
 }
 
