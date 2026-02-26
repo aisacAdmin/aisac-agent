@@ -1,10 +1,10 @@
 # Binaries
 build/
 bin/
-agent
-server
-aisac-agent
-aisac-server
+/agent
+/server
+/aisac-agent
+/aisac-server
 aisac-agent-*
 aisac-server-*
 *.exe
