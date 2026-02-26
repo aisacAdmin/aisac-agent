@@ -126,9 +126,9 @@ The AISAC Agent communicates with the AISAC Platform through a reverse proxy for
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    api.aisac.cisec.es (Caddy Proxy)                     │
 │                                                                         │
-│  /functions/v1/agent-heartbeat   →  Supabase Edge Function              │
-│  /functions/v1/syslog-ingest     →  Supabase Edge Function              │
-│  /functions/v1/agent-register    →  Supabase Edge Function              │
+│  /v1/heartbeat   →  Supabase Edge Function              │
+│  /v1/logs     →  Supabase Edge Function              │
+│  /v1/agent-webhook    →  Supabase Edge Function              │
 └─────────────────────────────────────────────────────────────────────────┘
           │                 │                   │
           ▼                 ▼                   ▼
@@ -136,7 +136,7 @@ The AISAC Agent communicates with the AISAC Platform through a reverse proxy for
 │                      Supabase Backend                                   │
 │                                                                         │
 │  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐       │
-│  │ agent-heartbeat │   │  syslog-ingest  │   │ agent-register  │       │
+│  │ agent-heartbeat │   │  syslog-ingest  │   │ agent-webhook   │       │
 │  │ Edge Function   │   │ Edge Function   │   │ Edge Function   │       │
 │  └────────┬────────┘   └────────┬────────┘   └────────┬────────┘       │
 │           │                     │                     │                 │
@@ -153,20 +153,20 @@ The AISAC Agent communicates with the AISAC Platform through a reverse proxy for
 ### Communication Flow
 
 1. **Agent Registration** (on first install):
-   - Installer generates unique Agent ID: `agent-{hostname}-{random6}`
-   - Agent calls `POST /functions/v1/agent-register` with API Key
+   - Installer generates or reuses persistent Agent ID: `agent-{hostname}-{random6}` (persisted in `/var/lib/aisac/agent-id`)
+   - Agent calls `POST /v1/agent-webhook` with API Key
    - Platform validates API Key and links agent to monitored asset
 
 2. **Heartbeat** (periodic, default 120s):
    - Agent collects system metrics (CPU, memory, disk)
-   - Sends `POST /functions/v1/agent-heartbeat` with `X-API-Key` header
+   - Sends `POST /v1/heartbeat` with `X-API-Key` header
    - Platform updates asset status to "online" and stores metrics
    - Response can override heartbeat interval
 
 3. **Log Collection** (continuous):
    - Collector reads log files (Suricata, Wazuh, syslog)
    - Batches events (default: 100 events or 5s interval)
-   - Sends `POST /functions/v1/syslog-ingest` as JSON + gzip
+   - Sends `POST /v1/logs` as JSON + gzip
    - Platform normalizes and stores events for SIEM analysis
 
 4. **SOAR Commands** (on-demand, optional):
@@ -180,7 +180,7 @@ The AISAC Agent communicates with the AISAC Platform through a reverse proxy for
 |----------|-------------|--------|
 | agent-heartbeat | API Key | `X-API-Key: aisac_xxxx` |
 | syslog-ingest | API Key | `Authorization: Bearer aisac_xxxx` |
-| agent-register | API Key | `Authorization: Bearer aisac_xxxx` |
+| agent-webhook | API Key | `Authorization: Bearer aisac_xxxx` |
 | Command Server | mTLS | Client certificate |
 
 ### Non-Interactive Installation
@@ -266,7 +266,7 @@ brew install openssl
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/aisac-agent.git
+git clone https://github.com/CISECSL/aisac-agent.git
 cd aisac-agent
 
 # Install dependencies
@@ -590,7 +590,7 @@ sudo nano /etc/systemd/system/aisac-server.service
 ```ini
 [Unit]
 Description=AISAC Command Server
-Documentation=https://github.com/yourusername/aisac-agent
+Documentation=https://github.com/CISECSL/aisac-agent
 After=network-online.target
 Wants=network-online.target
 
@@ -946,7 +946,7 @@ sudo nano /etc/systemd/system/aisac-agent.service
 ```ini
 [Unit]
 Description=AISAC Security Response Agent
-Documentation=https://github.com/yourusername/aisac-agent
+Documentation=https://github.com/CISECSL/aisac-agent
 After=network-online.target
 Wants=network-online.target
 
@@ -1125,7 +1125,7 @@ server:
 # Enable heartbeat
 heartbeat:
   enabled: true
-  url: "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
   api_key: "aisac_your_api_key_here"
   asset_id: "your-asset-uuid-here"
   interval: 120s
@@ -1209,7 +1209,7 @@ server:
 # Optional: Enable heartbeat with collector
 heartbeat:
   enabled: true
-  url: "https://api.aisac.cisec.es/functions/v1/agent-heartbeat"
+  url: "https://api.aisac.cisec.es/v1/heartbeat"
   api_key: "aisac_your_api_key_here"
   asset_id: "your-asset-uuid-here"
   interval: 120s
@@ -1249,7 +1249,7 @@ collector:
   # Output to AISAC SIEM
   output:
     type: http
-    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    url: "https://api.aisac.cisec.es/v1/logs"
     api_key: "aisac_your_api_key_here"
     timeout: 30s
     retry_attempts: 3
@@ -1936,8 +1936,8 @@ du -sh /var/log/aisac/agent.log
 
 ### Getting Help
 
-- **Documentation**: [GitHub Repository](https://github.com/yourusername/aisac-agent)
-- **Issues**: [GitHub Issues](https://github.com/yourusername/aisac-agent/issues)
+- **Documentation**: [GitHub Repository](https://github.com/CISECSL/aisac-agent)
+- **Issues**: [GitHub Issues](https://github.com/CISECSL/aisac-agent/issues)
 - **Logs**: Always include logs when reporting issues
 - **Version**: Run `aisac-agent --version` or `aisac-server --version`
 

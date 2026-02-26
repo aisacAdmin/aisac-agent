@@ -114,7 +114,7 @@ collector:
       parser: suricata_eve
   output:
     type: http
-    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    url: "https://api.aisac.cisec.es/v1/logs"
     api_key: "aisac_your_api_key_here"
 ```
 
@@ -462,7 +462,7 @@ This generates:
 
 #### Agent Registration with Command Server Data
 
-The installer registers the agent with the platform via `POST /v1/register`, including Command Server connection details when SOAR is enabled. This allows the platform to store the CS API token for SOAR workflows — using a single per-asset API key instead of requiring a separate `PLATFORM_API_KEY`.
+The installer registers the agent with the platform via `POST /v1/agent-webhook`, including Command Server connection details when SOAR is enabled. This allows the platform to store the CS API token for SOAR workflows — using a single per-asset API key instead of requiring a separate `PLATFORM_API_KEY`.
 
 See [docs/platform-webhook.md](docs/platform-webhook.md) for detailed registration documentation.
 
@@ -604,7 +604,7 @@ collector:
     # Output type: http
     type: http
     # Ingest endpoint URL
-    url: "https://api.aisac.cisec.es/functions/v1/syslog-ingest"
+    url: "https://api.aisac.cisec.es/v1/logs"
     # API Key for authentication
     api_key: "aisac_your_api_key_here"
     # Request timeout
@@ -721,6 +721,9 @@ callback:
 | `AISAC_HEARTBEAT_ASSET_ID` | Asset UUID from platform | `uuid-here` |
 | **Collector** | | |
 | `AISAC_COLLECTOR_API_KEY` | Collector API key | `aisac_xxxx...` |
+| **Installer** | | |
+| `AISAC_REGISTER_URL` | Override registration endpoint (staging) | `https://staging.api.aisac.cisec.es/v1/agent-webhook` |
+| `AISAC_NONINTERACTIVE` | Run installer in non-interactive mode | `true` |
 
 ---
 
@@ -1305,8 +1308,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 For issues, questions, or contributions:
-- **Issues**: [GitHub Issues](https://github.com/cisec/aisac-agent/issues)
-- **Documentation**: [Wiki](https://github.com/cisec/aisac-agent/wiki)
+- **Issues**: [GitHub Issues](https://github.com/CISECSL/aisac-agent/issues)
+- **Documentation**: [Wiki](https://github.com/CISECSL/aisac-agent/wiki)
 - **Email**: support@aisac.io
 
 ---
