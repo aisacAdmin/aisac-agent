@@ -1143,6 +1143,14 @@ heartbeat:
   timeout: 10s
   skip_tls_verify: false
 
+registration:
+  enabled: true
+  url: "$($script:PLATFORM_URL)/v1/agent-webhook"
+  api_key: "$($script:API_KEY)"
+  asset_id: "$($script:ASSET_ID)"
+  command_server_url: "$($script:PUBLIC_SERVER_URL)"
+  command_server_token: "$($script:SERVER_API_TOKEN)"
+
 collector:
   enabled: $($script:COLLECTOR_ENABLED.ToString().ToLower())
 "@

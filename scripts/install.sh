@@ -1110,6 +1110,14 @@ heartbeat:
   timeout: 10s
   skip_tls_verify: false
 
+registration:
+  enabled: true
+  url: "${PLATFORM_URL}/v1/agent-webhook"
+  api_key: "${API_KEY:-aisac_your_api_key_here}"
+  asset_id: "${ASSET_ID:-your-asset-uuid-here}"
+  command_server_url: "${PUBLIC_SERVER_URL:-}"
+  command_server_token: "${SERVER_API_TOKEN:-}"
+
 collector:
   enabled: ${COLLECTOR_ENABLED}
 EOF

@@ -20,9 +20,20 @@ type AgentConfig struct {
 	Callback     CallbackSettings     `yaml:"callback"`
 	Collector    collector.Config     `yaml:"collector"`
 	Heartbeat    heartbeat.Config     `yaml:"heartbeat"`
+	Registration RegistrationSettings `yaml:"registration"`
 	Logging      LoggingSettings      `yaml:"logging"`
 	ControlPlane ControlPlaneSettings `yaml:"control_plane"`
 	Safety       SafetySettings       `yaml:"safety"`
+}
+
+// RegistrationSettings contains platform registration configuration.
+type RegistrationSettings struct {
+	Enabled             bool   `yaml:"enabled"`
+	URL                 string `yaml:"url"`
+	APIKey              string `yaml:"api_key"`
+	AssetID             string `yaml:"asset_id"`
+	CommandServerURL    string `yaml:"command_server_url"`
+	CommandServerToken  string `yaml:"command_server_token"`
 }
 
 // AgentSettings contains agent-specific settings.
@@ -152,8 +163,11 @@ func DefaultAgentConfig() *AgentConfig {
 			RetryAttempts: 3,
 			RetryDelay:    5 * time.Second,
 		},
-		Collector: *collector.DefaultConfig(),
-		Heartbeat: heartbeat.DefaultConfig(),
+		Collector:    *collector.DefaultConfig(),
+		Heartbeat:    heartbeat.DefaultConfig(),
+		Registration: RegistrationSettings{
+			Enabled: false,
+		},
 		Logging: LoggingSettings{
 			Level:  "info",
 			Format: "json",
@@ -244,6 +258,17 @@ func (c *AgentConfig) applyEnvOverrides() {
 	}
 	if heartbeatURL := os.Getenv("AISAC_HEARTBEAT_URL"); heartbeatURL != "" {
 		c.Heartbeat.URL = heartbeatURL
+	}
+
+	// Registration environment overrides
+	if regURL := os.Getenv("AISAC_REGISTER_URL"); regURL != "" {
+		c.Registration.URL = regURL
+	}
+	if csURL := os.Getenv("AISAC_CS_URL"); csURL != "" {
+		c.Registration.CommandServerURL = csURL
+	}
+	if csToken := os.Getenv("AISAC_CS_TOKEN"); csToken != "" {
+		c.Registration.CommandServerToken = csToken
 	}
 }
 
