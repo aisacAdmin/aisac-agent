@@ -166,12 +166,14 @@ generate_agent_id() {
 
 # Returns the existing agent ID from disk, or generates and persists a new one.
 # Priority: AISAC_AGENT_ID env var > persisted file > new random ID.
+# NOTE: Only the ID is written to stdout. Log messages go to stderr so that
+#       callers using $(get_or_create_agent_id) only capture the clean ID.
 get_or_create_agent_id() {
     local id_file="$DATA_DIR/agent-id"
 
     # Allow explicit override via env var
     if [ -n "${AISAC_AGENT_ID:-}" ]; then
-        log_info "Using Agent ID from AISAC_AGENT_ID env var"
+        log_info "Using Agent ID from AISAC_AGENT_ID env var" >&2
         mkdir -p "$DATA_DIR"
         echo "${AISAC_AGENT_ID}" > "$id_file"
         chmod 644 "$id_file"
@@ -184,7 +186,7 @@ get_or_create_agent_id() {
         local existing_id
         existing_id=$(cat "$id_file" 2>/dev/null | tr -d '[:space:]')
         if [ -n "$existing_id" ]; then
-            log_info "Reusing existing Agent ID from ${id_file}"
+            log_info "Reusing existing Agent ID from ${id_file}" >&2
             echo "$existing_id"
             return
         fi
@@ -196,6 +198,7 @@ get_or_create_agent_id() {
     mkdir -p "$DATA_DIR"
     echo "$new_id" > "$id_file"
     chmod 644 "$id_file"
+    log_info "Generated new Agent ID: ${new_id}" >&2
     echo "$new_id"
 }
 
