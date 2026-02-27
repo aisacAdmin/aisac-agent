@@ -36,7 +36,7 @@ Please be respectful and constructive in all interactions. We are committed to p
    ```
 3. Add upstream remote:
    ```bash
-   git remote add upstream https://github.com/cisec/aisac-agent.git
+   git remote add upstream https://github.com/CISECSL/aisac-agent.git
    ```
 
 ## Development Setup

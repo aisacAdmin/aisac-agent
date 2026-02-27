@@ -46,7 +46,7 @@ Update these sections in **both** `api.aisac.cisec.es` and `staging-api.aisac.ci
 
 1. `/v1/logs` → syslog-ingest
 2. `/v1/heartbeat` → agent-heartbeat
-3. `/v1/register` → agent-register
+3. `/v1/agent-webhook` → agent-webhook
 
 ### Complete Fixed Sections
 
@@ -66,14 +66,14 @@ handle @heartbeat {
     }
 }
 
-# 4b. Register agentes AISAC (va a Supabase)
-@register path /v1/register
+# 4b. Register agentes AISAC (va a Supabase agent-webhook)
+@register path /v1/agent-webhook
 handle @register {
     reverse_proxy https://wjozpyhcexzcxgxwdbzr.supabase.co {
         header_up Host wjozpyhcexzcxgxwdbzr.supabase.co
         header_up X-Forwarded-For {remote_host}
         header_up X-Real-IP {remote_host}
-        rewrite /functions/v1/agent-register
+        rewrite /functions/v1/agent-webhook
         transport http {
             read_timeout 30s
             write_timeout 30s

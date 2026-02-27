@@ -12,8 +12,8 @@ Error del agente:
 **Configuración del agente:**
 - API Key: `aisac_9ded1557a711b99682995852702d30c2b1a3070863f7ae53`
 - Asset ID: `d2a84f77-207e-4fb6-8860-09502b09db78`
-- URL Heartbeat: `https://api.aisac.cisec.es/functions/v1/agent-heartbeat`
-- URL Syslog: `https://api.aisac.cisec.es/functions/v1/syslog-ingest`
+- URL Heartbeat: `https://api.aisac.cisec.es/v1/heartbeat`
+- URL Syslog: `https://api.aisac.cisec.es/v1/logs`
 
 ---
 
@@ -52,7 +52,7 @@ WHERE api_key = 'aisac_9ded1557a711b99682995852702d30c2b1a3070863f7ae53'
 
 ### 1. `agent-heartbeat`
 
-**Endpoint:** `POST /functions/v1/agent-heartbeat`
+**Endpoint:** `POST /v1/heartbeat`
 
 **Headers:**
 ```
@@ -99,7 +99,7 @@ const { data: asset, error } = await supabase
 
 ### 2. `syslog-ingest`
 
-**Endpoint:** `POST /functions/v1/syslog-ingest`
+**Endpoint:** `POST /v1/logs`
 
 **Headers:**
 ```
@@ -153,7 +153,7 @@ supabase functions deploy syslog-ingest
 ### Test manual:
 
 ```bash
-curl -v -X POST 'https://api.aisac.cisec.es/functions/v1/agent-heartbeat' \
+curl -v -X POST 'https://api.aisac.cisec.es/v1/heartbeat' \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: aisac_9ded1557a711b99682995852702d30c2b1a3070863f7ae53' \
   -d '{

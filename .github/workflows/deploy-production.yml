@@ -1,0 +1,249 @@
+name: Deploy Production
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "DEPLOY" to confirm production deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  AGENT_IMAGE: ghcr.io/cisecsl/aisac/agent
+  SERVER_IMAGE: ghcr.io/cisecsl/aisac/server
+
+jobs:
+  pre-deploy-validation:
+    name: Pre-deploy Validation
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate deployment confirmation
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "DEPLOY" ]; then
+            echo "::error::You must type DEPLOY to confirm production deployment"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run linter
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: Run tests
+        run: go test -v -race -cover ./...
+
+      - name: Security audit
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Build verification
+        run: make build
+
+  deploy-edge-functions:
+    name: Deploy Edge Functions (Production)
+    needs: pre-deploy-validation
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy functions with retry
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PRODUCTION_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
+        run: |
+          deploy_function() {
+            local func=$1
+            local attempt=0
+            local max_attempts=5
+            local delay=15
+
+            echo "Deploying $func to production..."
+            while true; do
+              if supabase functions deploy "$func" --project-ref "$PROJECT_REF"; then
+                echo "Successfully deployed $func"
+                return 0
+              fi
+              attempt=$((attempt + 1))
+              if [ $attempt -ge $max_attempts ]; then
+                echo "::error::CRITICAL: Failed to deploy $func after $max_attempts attempts"
+                return 1
+              fi
+              echo "::warning::Attempt $attempt failed for $func. Retrying in ${delay}s..."
+              sleep $delay
+              delay=$((delay * 2))
+            done
+          }
+
+          failed=0
+          for func_dir in supabase/functions/*/; do
+            func=$(basename "$func_dir")
+            if [ ! -f "supabase/functions/$func/index.ts" ]; then
+              echo "Skipping $func (no index.ts)"
+              continue
+            fi
+            deploy_function "$func" || failed=1
+          done
+
+          if [ $failed -ne 0 ]; then
+            exit 1
+          fi
+
+  docker-push:
+    name: Push Docker Images (Production)
+    needs: pre-deploy-validation
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata (agent)
+        id: meta-agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.AGENT_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push agent
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-agent.outputs.tags }}
+          labels: ${{ steps.meta-agent.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.pre-deploy-validation.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Docker metadata (server)
+        id: meta-server
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.SERVER_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-server.outputs.tags }}
+          labels: ${{ steps.meta-server.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.pre-deploy-validation.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  health-check:
+    name: Production Health Check
+    needs: [docker-push, deploy-edge-functions]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check with retries
+        run: |
+          echo "## Production Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version:** ${{ needs.pre-deploy-validation.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Agent image:** ${{ env.AGENT_IMAGE }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Server image:** ${{ env.SERVER_IMAGE }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          # When PRODUCTION_HEALTH_URL is configured, uncomment:
+          # for i in 1 2 3 4 5; do
+          #   if curl -sf "$PRODUCTION_HEALTH_URL/api/v1/health"; then
+          #     echo "Health check passed on attempt $i"
+          #     exit 0
+          #   fi
+          #   echo "Attempt $i failed, retrying in 30s..."
+          #   sleep 30
+          # done
+          # echo "::error::Health check failed after 5 attempts"
+          # exit 1
+
+  release:
+    name: GitHub Release
+    needs: [docker-push, deploy-edge-functions, health-check]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

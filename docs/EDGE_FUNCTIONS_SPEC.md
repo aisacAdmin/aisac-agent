@@ -14,8 +14,8 @@ El agente ya está instalado y funcionando, pero recibe **401 Unauthorized** por
 
 | Endpoint | Método | Descripción |
 |----------|--------|-------------|
-| `/functions/v1/agent-heartbeat` | POST | Recibe heartbeats de agentes |
-| `/functions/v1/syslog-ingest` | POST | Recibe batches de eventos de logs |
+| `/v1/heartbeat` | POST | Recibe heartbeats de agentes |
+| `/v1/logs` | POST | Recibe batches de eventos de logs |
 
 ---
 
@@ -24,7 +24,7 @@ El agente ya está instalado y funcionando, pero recibe **401 Unauthorized** por
 ### Request
 
 ```http
-POST /functions/v1/agent-heartbeat
+POST /v1/heartbeat
 Content-Type: application/json
 X-API-Key: aisac_9ded1557a711b99682995852702d30c2b1a3070863f7ae53
 ```
@@ -119,7 +119,7 @@ return {
 ### Request
 
 ```http
-POST /functions/v1/syslog-ingest
+POST /v1/logs
 Content-Type: application/json
 X-API-Key: aisac_9ded1557a711b99682995852702d30c2b1a3070863f7ae53
 ```
@@ -333,7 +333,7 @@ SELECT validate_asset_api_key('aisac_9ded1557a711b99682995852702d30c2b1a3070863f
 ### 3. Test de endpoint después de desplegar
 
 ```bash
-curl -X POST 'https://api.aisac.cisec.es/functions/v1/agent-heartbeat' \
+curl -X POST 'https://api.aisac.cisec.es/v1/heartbeat' \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: aisac_9ded1557a711b99682995852702d30c2b1a3070863f7ae53' \
   -d '{
