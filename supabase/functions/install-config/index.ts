@@ -183,7 +183,10 @@ serve(async (req: Request) => {
     // 5. Get AISAC platform URLs and anon key from environment
     const heartbeatUrl = Deno.env.get("AISAC_HEARTBEAT_URL") || `${supabaseUrl}/functions/v1/agent-heartbeat`;
     const ingestUrl = Deno.env.get("AISAC_INGEST_URL") || `${supabaseUrl}/functions/v1/syslog-ingest`;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+    // Use AISAC_AUTH_TOKEN (legacy JWT anon key) for agent auth.
+    // SUPABASE_ANON_KEY may return the new publishable key format (sb_publishable_...)
+    // which is not accepted by Edge Functions gateway as Authorization Bearer token.
+    const authToken = Deno.env.get("AISAC_AUTH_TOKEN") || Deno.env.get("SUPABASE_ANON_KEY") || "";
 
     // 6. Return full config for the install script
     return new Response(
@@ -200,7 +203,7 @@ serve(async (req: Request) => {
           heartbeat_url: heartbeatUrl,
           ingest_url: ingestUrl,
           api_key: apiKey,
-          auth_token: supabaseAnonKey,
+          auth_token: authToken,
         },
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }

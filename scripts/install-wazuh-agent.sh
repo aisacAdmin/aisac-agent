@@ -257,12 +257,18 @@ main() {
     # 4. Install Wazuh Agent
     install_wazuh_agent "$manager_ip" "${manager_port:-1514}" "$agent_group" "$asset_name"
 
-    # 5. Get the Wazuh agent ID assigned by the Manager
+    # 5. Get the Wazuh agent ID assigned by the Manager (retry up to 15s)
     local wazuh_agent_id=""
-    if [ -f /var/ossec/etc/client.keys ]; then
-        wazuh_agent_id=$(awk '{print $1; exit}' /var/ossec/etc/client.keys)
-        log_info "Wazuh agent ID: ${wazuh_agent_id}"
-    fi
+    for attempt in 1 2 3 4 5; do
+        if [ -f /var/ossec/etc/client.keys ] && [ -s /var/ossec/etc/client.keys ]; then
+            wazuh_agent_id=$(awk '{print $1; exit}' /var/ossec/etc/client.keys)
+            if [ -n "$wazuh_agent_id" ]; then
+                log_info "Wazuh agent ID: ${wazuh_agent_id}"
+                break
+            fi
+        fi
+        [ "$attempt" -lt 5 ] && { log_info "Waiting for agent registration... ($attempt/5)"; sleep 3; }
+    done
 
     # 6. Update integration_config in platform so syslog-ingest can route by agent name
     update_integration_config "$api_key" "$register_url" "$asset_name" "$wazuh_agent_id"

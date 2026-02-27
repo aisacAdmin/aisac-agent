@@ -86,11 +86,14 @@ function Install-Binary {
         Start-Sleep -Seconds 2
     }
 
-    # Option 1: Local binary
-    $localBinary = Join-Path $PSScriptRoot "aisac-agent-windows-amd64.exe"
+    # Option 1: Local binary (try exact name first, then with os-arch suffix)
+    $localBinary = Join-Path $PSScriptRoot "aisac-agent.exe"
+    if (-not (Test-Path $localBinary)) {
+        $localBinary = Join-Path $PSScriptRoot "aisac-agent-windows-amd64.exe"
+    }
     if (Test-Path $localBinary) {
         Copy-Item $localBinary $binaryPath -Force
-        Write-Ok "Binary copied from local path"
+        Write-Ok "Binary copied from $localBinary"
         return
     }
 
@@ -266,16 +269,15 @@ function Install-Service {
         }
 
         if (-not $downloaded) {
-            Write-Fail "Failed to download NSSM from all sources"
-            exit 1
+            Write-Info "NSSM download failed, will use native sc.exe fallback"
+        } else {
+            Expand-Archive -Path $nssmZip -DestinationPath "$env:TEMP\nssm" -Force
+            $nssmExe = Get-ChildItem "$env:TEMP\nssm" -Filter "nssm.exe" -Recurse `
+                | Where-Object { $_.FullName -like "*win64*" } | Select-Object -First 1
+            Copy-Item $nssmExe.FullName $nssmPath -Force
+            Remove-Item $nssmZip, "$env:TEMP\nssm" -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Ok "NSSM downloaded"
         }
-
-        Expand-Archive -Path $nssmZip -DestinationPath "$env:TEMP\nssm" -Force
-        $nssmExe = Get-ChildItem "$env:TEMP\nssm" -Filter "nssm.exe" -Recurse `
-            | Where-Object { $_.FullName -like "*win64*" } | Select-Object -First 1
-        Copy-Item $nssmExe.FullName $nssmPath -Force
-        Remove-Item $nssmZip, "$env:TEMP\nssm" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Ok "NSSM downloaded"
     }
 
     # Remove existing service if present
@@ -286,17 +288,31 @@ function Install-Service {
             Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 2
         }
-        & $nssmPath remove $ServiceName confirm 2>$null
+        if (Test-Path $nssmPath) {
+            & $nssmPath remove $ServiceName confirm 2>$null
+        } else {
+            sc.exe delete $ServiceName 2>$null
+        }
         Start-Sleep -Seconds 2
     }
 
-    # Install service
-    & $nssmPath install $ServiceName $binaryPath "-c `"$configPath`""
-    & $nssmPath set $ServiceName DisplayName "AISAC Security Agent"
-    & $nssmPath set $ServiceName Description "AISAC SIEM/SOAR Agent - Heartbeat and incident response"
-    & $nssmPath set $ServiceName Start SERVICE_AUTO_START
-    & $nssmPath set $ServiceName AppStdout (Join-Path $LogDir "service-stdout.log")
-    & $nssmPath set $ServiceName AppStderr (Join-Path $LogDir "service-stderr.log")
+    if (Test-Path $nssmPath) {
+        # Install service with NSSM
+        & $nssmPath install $ServiceName $binaryPath "-c `"$configPath`""
+        & $nssmPath set $ServiceName DisplayName "AISAC Security Agent"
+        & $nssmPath set $ServiceName Description "AISAC SIEM/SOAR Agent - Heartbeat and incident response"
+        & $nssmPath set $ServiceName Start SERVICE_AUTO_START
+        & $nssmPath set $ServiceName AppStdout (Join-Path $LogDir "service-stdout.log")
+        & $nssmPath set $ServiceName AppStderr (Join-Path $LogDir "service-stderr.log")
+    } else {
+        # Fallback: install service with New-Service
+        Write-Info "Installing service with New-Service (native)..."
+        New-Service -Name $ServiceName `
+            -BinaryPathName "`"$binaryPath`" -c `"$configPath`"" `
+            -DisplayName "AISAC Security Agent" `
+            -Description "AISAC SIEM/SOAR Agent - Heartbeat and incident response" `
+            -StartupType Automatic
+    }
 
     Write-Ok "Service installed"
 }

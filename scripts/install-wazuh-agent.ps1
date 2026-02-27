@@ -164,14 +164,21 @@ Write-Info "Asset name: $assetName"
 Install-WazuhAgent -ManagerIp $managerIp -ManagerPort $managerPort `
     -AgentGroup $agentGroup -AgentName $assetName
 
-# 4. Get Wazuh agent ID assigned by the Manager
+# 4. Get Wazuh agent ID assigned by the Manager (retry up to 15s)
 $wazuhAgentId = ""
 $clientKeysPath = "C:\Program Files (x86)\ossec-agent\client.keys"
-if (Test-Path $clientKeysPath) {
-    $firstLine = Get-Content $clientKeysPath -TotalCount 1
-    if ($firstLine -match "^(\d+)\s") {
-        $wazuhAgentId = $Matches[1]
-        Write-Info "Wazuh agent ID: $wazuhAgentId"
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    if (Test-Path $clientKeysPath) {
+        $firstLine = Get-Content $clientKeysPath -TotalCount 1 -ErrorAction SilentlyContinue
+        if ($firstLine -and $firstLine -match "^(\d+)\s") {
+            $wazuhAgentId = $Matches[1]
+            Write-Info "Wazuh agent ID: $wazuhAgentId"
+            break
+        }
+    }
+    if ($attempt -lt 5) {
+        Write-Info "Waiting for agent registration... ($attempt/5)"
+        Start-Sleep -Seconds 3
     }
 }
 
