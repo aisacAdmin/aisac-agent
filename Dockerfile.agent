@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build \
     -o /bin/aisac-agent ./cmd/agent
 
 # Stage 2: Runtime
-FROM alpine:3.19
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata \
     iptables ip6tables nftables \
