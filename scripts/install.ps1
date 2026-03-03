@@ -13,6 +13,11 @@
 #
 
 param(
+    [Parameter(Mandatory=$true)]
+    [string]$ManagerIp,
+
+    [string]$ApiKey,
+    [string]$AuthToken,
     [string]$RegisterUrl = "https://api.aisac.cisec.es/functions/v1/install-config"
 )
 
@@ -98,7 +103,12 @@ Get-Scripts
 
 Write-Info "Register URL: $RegisterUrl"
 
-$ApiKey = Get-ApiKey
+# Get auth token from param or env
+if (-not $AuthToken) { $AuthToken = $env:AISAC_AUTH_TOKEN }
+if (-not $AuthToken) { $AuthToken = "" }
+
+# Get API key from param or env or prompt
+if (-not $ApiKey) { $ApiKey = Get-ApiKey }
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
@@ -108,7 +118,9 @@ Write-Host ""
 
 try {
     $global:LASTEXITCODE = 0
-    & (Join-Path $ScriptDir "install-wazuh-agent.ps1") -ApiKey $ApiKey -RegisterUrl $RegisterUrl
+    $wazuhArgs = @{ ApiKey = $ApiKey; RegisterUrl = $RegisterUrl; ManagerIp = $ManagerIp }
+    if ($AuthToken) { $wazuhArgs["AuthToken"] = $AuthToken }
+    & (Join-Path $ScriptDir "install-wazuh-agent.ps1") @wazuhArgs
 } catch {
     Write-Fail "Wazuh Agent installation failed: $($_.Exception.Message)"
     Write-Fail "Common issues:"

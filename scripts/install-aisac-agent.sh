@@ -22,6 +22,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/aisac"
 CONFIG_DIR="/etc/aisac"
 DATA_DIR="/var/lib/aisac"
@@ -121,23 +122,17 @@ install_binary() {
         systemctl stop "$SERVICE_NAME"
     fi
 
-    # Option 1: Compile from source
-    if [ -f "./go.mod" ] && [ -d "./cmd/agent" ] && command -v go &>/dev/null; then
-        log_info "Compiling from source..."
-        go build -o "$INSTALL_DIR/$BINARY_NAME" ./cmd/agent/
-        log_success "Binary compiled"
-
-    # Option 2: Local prebuilt binary (exact name or with os-arch suffix)
-    elif [ -f "./bin/${BINARY_NAME}" ]; then
-        cp "./bin/${BINARY_NAME}" "$INSTALL_DIR/$BINARY_NAME"
-        log_success "Binary copied from ./bin/${BINARY_NAME}"
-    elif ls ./bin/${BINARY_NAME}-*-* &>/dev/null; then
+    # Option 1: Binary in same directory as script (exact name or with os-arch suffix)
+    if [ -f "${SCRIPT_DIR}/${BINARY_NAME}" ]; then
+        cp "${SCRIPT_DIR}/${BINARY_NAME}" "$INSTALL_DIR/$BINARY_NAME"
+        log_success "Binary copied from ${SCRIPT_DIR}/${BINARY_NAME}"
+    elif ls "${SCRIPT_DIR}/${BINARY_NAME}"-*-* &>/dev/null 2>&1; then
         local local_bin
-        local_bin=$(ls ./bin/${BINARY_NAME}-*-* | head -1)
+        local_bin=$(ls "${SCRIPT_DIR}/${BINARY_NAME}"-*-* | head -1)
         cp "$local_bin" "$INSTALL_DIR/$BINARY_NAME"
         log_success "Binary copied from $local_bin"
 
-    # Option 3: Download from GitHub Releases
+    # Option 2: Download from GitHub Releases
     else
         local arch os
         arch=$(uname -m)
@@ -242,6 +237,7 @@ EOF
     type: http
     url: "${INGEST_URL}"
     api_key: "${API_KEY}"
+    auth_token: "${AUTH_TOKEN}"
     asset_id: "${ASSET_ID}"
     timeout: 30s
     retry_attempts: 3

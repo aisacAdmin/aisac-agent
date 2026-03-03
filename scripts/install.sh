@@ -104,21 +104,28 @@ prompt_api_key() {
 main() {
     # Parse arguments
     REGISTER_URL="$DEFAULT_REGISTER_URL"
+    API_KEY="${AISAC_API_KEY:-}"
+    AUTH_TOKEN="${AISAC_AUTH_TOKEN:-}"
+    MANAGER_IP=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --register-url)
-                REGISTER_URL="$2"
-                shift 2
-                ;;
+            -k) API_KEY="$2"; shift 2 ;;
+            -t) AUTH_TOKEN="$2"; shift 2 ;;
+            -m) MANAGER_IP="$2"; shift 2 ;;
+            -u) REGISTER_URL="$2"; shift 2 ;;
+            --register-url) REGISTER_URL="$2"; shift 2 ;;
             --help|-h)
-                echo "Usage: $0 [--register-url <url>]"
+                echo "Usage: $0 -m <MANAGER_IP> -k <API_KEY> [-t <AUTH_TOKEN>] [-u <REGISTER_URL>]"
                 echo ""
                 echo "Options:"
-                echo "  --register-url   URL of the install-config Edge Function"
-                echo "                   Default: ${DEFAULT_REGISTER_URL}"
+                echo "  -m <MANAGER_IP>    Wazuh Manager IP address (required)"
+                echo "  -k <API_KEY>       AISAC Platform API Key (required)"
+                echo "  -t <AUTH_TOKEN>    Supabase anon key (JWT) for gateway auth"
+                echo "  -u <REGISTER_URL>  Install-config endpoint"
+                echo "                     Default: ${DEFAULT_REGISTER_URL}"
                 echo ""
                 echo "Non-interactive mode:"
-                echo "  AISAC_API_KEY=aisac_xxx sudo ./install.sh"
+                echo "  AISAC_API_KEY=aisac_xxx AISAC_AUTH_TOKEN=eyJ... sudo ./install.sh -m 1.2.3.4"
                 exit 0
                 ;;
             *)
@@ -128,6 +135,12 @@ main() {
         esac
     done
 
+    if [ -z "$MANAGER_IP" ]; then
+        log_error "Wazuh Manager IP is required (-m <MANAGER_IP>)"
+        echo "Usage: $0 -m <MANAGER_IP> -k <API_KEY> [-t <AUTH_TOKEN>]"
+        exit 1
+    fi
+
     print_banner
     check_root
     check_dependencies
@@ -135,10 +148,9 @@ main() {
 
     log_info "Register URL: ${REGISTER_URL}"
 
-    # Get API key (from env or prompt)
-    if [ -n "${AISAC_API_KEY:-}" ]; then
-        API_KEY="$AISAC_API_KEY"
-        log_info "Using API Key from environment"
+    # Get API key (from -k flag, env, or prompt)
+    if [ -n "$API_KEY" ]; then
+        log_info "Using API Key from arguments"
     else
         prompt_api_key
     fi
@@ -149,7 +161,7 @@ main() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 
-    if ! bash "${SCRIPT_DIR}/install-wazuh-agent.sh" "$API_KEY" "$REGISTER_URL"; then
+    if ! bash "${SCRIPT_DIR}/install-wazuh-agent.sh" "$API_KEY" "$REGISTER_URL" "$AUTH_TOKEN" "$MANAGER_IP"; then
         log_error "Wazuh Agent installation failed"
         log_error "Check the error above. Common issues:"
         log_error "  - Invalid API Key"

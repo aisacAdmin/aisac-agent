@@ -190,6 +190,7 @@ $suricataBlock
     type: http
     url: "$($script:IngestUrl)"
     api_key: "$($script:ApiKey)"
+    auth_token: "$($script:AuthToken)"
     asset_id: "$($script:AssetId)"
     timeout: 30s
     retry_attempts: 3
