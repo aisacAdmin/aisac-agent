@@ -59,11 +59,11 @@ func (m *LinuxUserManager) DisableUser(ctx context.Context, username string, for
 	if forceLogout {
 		// Kill all user processes
 		cmd = exec.CommandContext(ctx, "pkill", "-u", username)
-		cmd.Run() // Ignore error if no processes
+		_ = cmd.Run() //nolint:errcheck // Ignore error if no processes
 
 		// Kill user sessions
 		cmd = exec.CommandContext(ctx, "loginctl", "terminate-user", username)
-		cmd.Run() // Ignore error if loginctl not available
+		_ = cmd.Run() //nolint:errcheck // Ignore error if loginctl not available
 	}
 
 	return nil

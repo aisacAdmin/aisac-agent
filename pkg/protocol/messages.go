@@ -15,16 +15,16 @@ type MessageType string
 
 const (
 	// Server -> Agent messages
-	MessageTypeCommand    MessageType = "command"
-	MessageTypePing       MessageType = "ping"
-	MessageTypeConfig     MessageType = "config_update"
-	MessageTypeCancel     MessageType = "cancel"
+	MessageTypeCommand MessageType = "command"
+	MessageTypePing    MessageType = "ping"
+	MessageTypeConfig  MessageType = "config_update"
+	MessageTypeCancel  MessageType = "cancel"
 
 	// Agent -> Server messages
-	MessageTypeResponse   MessageType = "response"
-	MessageTypePong       MessageType = "pong"
-	MessageTypeHeartbeat  MessageType = "heartbeat"
-	MessageTypeRegister   MessageType = "register"
+	MessageTypeResponse  MessageType = "response"
+	MessageTypePong      MessageType = "pong"
+	MessageTypeHeartbeat MessageType = "heartbeat"
+	MessageTypeRegister  MessageType = "register"
 )
 
 // Message is the base protocol message.
@@ -37,12 +37,12 @@ type Message struct {
 
 // Command represents an action command from server to agent.
 type Command struct {
-	ID            string                 `json:"id"`
-	Action        types.ActionType       `json:"action"`
-	Parameters    map[string]interface{} `json:"parameters"`
-	ExecutionID   string                 `json:"execution_id"`
-	TimeoutSeconds int                   `json:"timeout_seconds"`
-	Priority      int                    `json:"priority,omitempty"`
+	ID             string                 `json:"id"`
+	Action         types.ActionType       `json:"action"`
+	Parameters     map[string]interface{} `json:"parameters"`
+	ExecutionID    string                 `json:"execution_id"`
+	TimeoutSeconds int                    `json:"timeout_seconds"`
+	Priority       int                    `json:"priority,omitempty"`
 }
 
 // Response represents an action response from agent to server.
@@ -57,11 +57,11 @@ type Response struct {
 
 // Heartbeat represents a periodic heartbeat from agent to server.
 type Heartbeat struct {
-	AgentID     string           `json:"agent_id"`
-	Timestamp   time.Time        `json:"timestamp"`
-	Status      string           `json:"status"`
-	Metrics     *AgentMetrics    `json:"metrics,omitempty"`
-	ActiveTasks []string         `json:"active_tasks,omitempty"`
+	AgentID     string        `json:"agent_id"`
+	Timestamp   time.Time     `json:"timestamp"`
+	Status      string        `json:"status"`
+	Metrics     *AgentMetrics `json:"metrics,omitempty"`
+	ActiveTasks []string      `json:"active_tasks,omitempty"`
 }
 
 // AgentMetrics contains agent resource metrics.
@@ -74,17 +74,17 @@ type AgentMetrics struct {
 
 // RegisterRequest is sent when an agent connects to the server.
 type RegisterRequest struct {
-	AgentInfo    types.AgentInfo  `json:"agent_info"`
-	Capabilities []string         `json:"capabilities"`
-	Version      string           `json:"version"`
+	AgentInfo    types.AgentInfo `json:"agent_info"`
+	Capabilities []string        `json:"capabilities"`
+	Version      string          `json:"version"`
 }
 
 // RegisterResponse is sent by the server after registration.
 type RegisterResponse struct {
-	Accepted      bool     `json:"accepted"`
-	Message       string   `json:"message,omitempty"`
-	ServerVersion string   `json:"server_version"`
-	Config        []byte   `json:"config,omitempty"`
+	Accepted      bool   `json:"accepted"`
+	Message       string `json:"message,omitempty"`
+	ServerVersion string `json:"server_version"`
+	Config        []byte `json:"config,omitempty"`
 }
 
 // CancelCommand requests cancellation of a running command.

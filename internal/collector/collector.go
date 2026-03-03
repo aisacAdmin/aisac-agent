@@ -267,11 +267,11 @@ func (c *Collector) Stats() CollectorStats {
 
 // CollectorStats contains collector statistics.
 type CollectorStats struct {
-	Running      bool             `json:"running"`
-	TailerCount  int              `json:"tailer_count"`
-	SourceCount  int              `json:"source_count"`
-	ChannelUsage int              `json:"channel_usage"`
-	ChannelSize  int              `json:"channel_size"`
-	Batcher      BatcherStats     `json:"batcher"`
-	Output       HTTPOutputStats  `json:"output"`
+	Running      bool            `json:"running"`
+	TailerCount  int             `json:"tailer_count"`
+	SourceCount  int             `json:"source_count"`
+	ChannelUsage int             `json:"channel_usage"`
+	ChannelSize  int             `json:"channel_size"`
+	Batcher      BatcherStats    `json:"batcher"`
+	Output       HTTPOutputStats `json:"output"`
 }

@@ -33,21 +33,21 @@ var Version = "dev"
 
 // Agent represents the AISAC agent.
 type Agent struct {
-	cfg        *config.AgentConfig
-	logger     zerolog.Logger
-	conn       *websocket.Conn
-	connMu     sync.Mutex
-	executor   *actions.Executor
-	callback   *callback.Client
-	collector  *collector.Collector
-	heartbeat  *heartbeat.Client
-	safety     *safety.Manager
-	info       types.AgentInfo
-	infoMu     sync.RWMutex // Protects info.Status
+	cfg       *config.AgentConfig
+	logger    zerolog.Logger
+	conn      *websocket.Conn
+	connMu    sync.Mutex
+	executor  *actions.Executor
+	callback  *callback.Client
+	collector *collector.Collector
+	heartbeat *heartbeat.Client
+	safety    *safety.Manager
+	info      types.AgentInfo
+	infoMu    sync.RWMutex // Protects info.Status
 
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	activeTasks      map[string]context.CancelFunc
 	activeTasksMu    sync.Mutex
@@ -453,7 +453,9 @@ func (a *Agent) register() error {
 	}
 
 	// Wait for response
-	a.conn.SetReadDeadline(time.Now().Add(a.cfg.Server.ReadTimeout))
+	if err := a.conn.SetReadDeadline(time.Now().Add(a.cfg.Server.ReadTimeout)); err != nil {
+		return fmt.Errorf("setting read deadline: %w", err)
+	}
 	_, data, err := a.conn.ReadMessage()
 	if err != nil {
 		return fmt.Errorf("reading register response: %w", err)
@@ -484,7 +486,9 @@ func (a *Agent) messageLoop() error {
 		default:
 		}
 
-		a.conn.SetReadDeadline(time.Now().Add(a.cfg.Server.ReadTimeout))
+		if err := a.conn.SetReadDeadline(time.Now().Add(a.cfg.Server.ReadTimeout)); err != nil {
+			return fmt.Errorf("setting read deadline: %w", err)
+		}
 		_, data, err := a.conn.ReadMessage()
 		if err != nil {
 			return fmt.Errorf("reading message: %w", err)
@@ -732,7 +736,9 @@ func (a *Agent) sendMessage(msg *protocol.Message) error {
 		return fmt.Errorf("not connected")
 	}
 
-	a.conn.SetWriteDeadline(time.Now().Add(a.cfg.Server.WriteTimeout))
+	if err := a.conn.SetWriteDeadline(time.Now().Add(a.cfg.Server.WriteTimeout)); err != nil {
+		return fmt.Errorf("setting write deadline: %w", err)
+	}
 	return a.conn.WriteJSON(msg)
 }
 

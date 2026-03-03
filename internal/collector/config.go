@@ -19,7 +19,7 @@ type Config struct {
 // SourceConfig defines a log source to collect.
 type SourceConfig struct {
 	Name   string            `yaml:"name"`
-	Type   string            `yaml:"type"`   // "json_file", "file"
+	Type   string            `yaml:"type"` // "json_file", "file"
 	Path   string            `yaml:"path"`
 	Parser string            `yaml:"parser"` // "suricata_eve", "syslog", "json", "wazuh_alerts"
 	Tags   []string          `yaml:"tags"`   // Tags to add to events from this source
@@ -31,10 +31,10 @@ type OutputConfig struct {
 	Type          string        `yaml:"type"` // "http" or "opensearch"
 	URL           string        `yaml:"url"`
 	APIKey        string        `yaml:"api_key"`
-	AssetID       string        `yaml:"asset_id"`       // Asset ID for AISAC platform
-	Username      string        `yaml:"username"`       // For OpenSearch basic auth
-	Password      string        `yaml:"password"`       // For OpenSearch basic auth
-	Index         string        `yaml:"index"`          // For OpenSearch index pattern
+	AssetID       string        `yaml:"asset_id"` // Asset ID for AISAC platform
+	Username      string        `yaml:"username"` // For OpenSearch basic auth
+	Password      string        `yaml:"password"` // For OpenSearch basic auth
+	Index         string        `yaml:"index"`    // For OpenSearch index pattern
 	Timeout       time.Duration `yaml:"timeout"`
 	RetryAttempts int           `yaml:"retry_attempts"`
 	RetryDelay    time.Duration `yaml:"retry_delay"`
@@ -49,9 +49,9 @@ type BatchConfig struct {
 
 // FileConfig defines file handling behavior.
 type FileConfig struct {
-	StartPosition string `yaml:"start_position"` // "beginning" or "end"
-	SinceDBPath   string `yaml:"sincedb_path"`   // Path to store file positions
-	PollInterval  time.Duration `yaml:"poll_interval"` // How often to check for new data
+	StartPosition string        `yaml:"start_position"` // "beginning" or "end"
+	SinceDBPath   string        `yaml:"sincedb_path"`   // Path to store file positions
+	PollInterval  time.Duration `yaml:"poll_interval"`  // How often to check for new data
 }
 
 // DefaultConfig returns default collector configuration.

@@ -54,14 +54,14 @@ type Server struct {
 
 // AgentConn represents a connected agent.
 type AgentConn struct {
-	ID          string
-	Info        types.AgentInfo
-	Conn        *websocket.Conn
-	ConnMu      sync.Mutex
-	LastSeen    time.Time
-	msgCount    int64     // Message count for rate limiting
-	msgResetAt  time.Time // When to reset message count
-	stopPing    chan struct{} // Signal to stop ping loop
+	ID         string
+	Info       types.AgentInfo
+	Conn       *websocket.Conn
+	ConnMu     sync.Mutex
+	LastSeen   time.Time
+	msgCount   int64         // Message count for rate limiting
+	msgResetAt time.Time     // When to reset message count
+	stopPing   chan struct{} // Signal to stop ping loop
 }
 
 func main() {
@@ -164,7 +164,9 @@ func run(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		httpServer.Shutdown(ctx)
+		if err := httpServer.Shutdown(ctx); err != nil {
+			logger.Error().Err(err).Msg("Server shutdown error")
+		}
 	}()
 
 	// Start server
@@ -244,7 +246,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info().Str("agent_id", agentID).Str("remote", r.RemoteAddr).Str("client_ip", clientIP).Msg("Agent connected")
 
 	// Wait for registration
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to set read deadline")
+		return
+	}
 	_, data, err := conn.ReadMessage()
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to read registration")
@@ -366,7 +371,10 @@ func (s *Server) handleAgentMessages(agent *AgentConn) {
 	agent.msgCount = 0
 
 	for {
-		agent.Conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		if err := agent.Conn.SetReadDeadline(time.Now().Add(90 * time.Second)); err != nil {
+			s.logger.Debug().Err(err).Str("agent_id", agent.ID).Msg("Failed to set read deadline")
+			return
+		}
 		_, data, err := agent.Conn.ReadMessage()
 		if err != nil {
 			s.logger.Debug().Err(err).Str("agent_id", agent.ID).Msg("Read error")
@@ -436,7 +444,9 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agents)
+	if err := json.NewEncoder(w).Encode(agents); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to encode agents response")
+	}
 }
 
 func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
@@ -457,7 +467,9 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	info.Status = "connected"
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
+	if err := json.NewEncoder(w).Encode(info); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to encode agent info response")
+	}
 }
 
 func (s *Server) handleSendCommand(w http.ResponseWriter, r *http.Request) {
@@ -515,19 +527,23 @@ func (s *Server) handleSendCommand(w http.ResponseWriter, r *http.Request) {
 		Msg("Command sent to agent")
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"command_id": cmd.ID,
 		"status":     "sent",
-	})
+	}); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to encode command response")
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// SECURITY: Health endpoint only returns status
 	// Detailed metrics require authentication via /api/v1/status
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "healthy",
-	})
+	}); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to encode health response")
+	}
 }
 
 // handleStatus returns detailed server status (requires authentication).
@@ -537,11 +553,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.agentsMu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":      "healthy",
 		"version":     version,
 		"agent_count": agentCount,
-	})
+	}); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to encode status response")
+	}
 }
 
 // checkOrigin validates WebSocket connection origins.

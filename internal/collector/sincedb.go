@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -139,19 +138,4 @@ func (s *SinceDB) RemoveStale(maxAge time.Duration) {
 // fileKey generates a unique key for a file based on inode and device.
 func (s *SinceDB) fileKey(path string, inode, device uint64) string {
 	return fmt.Sprintf("%s|%d|%d", path, inode, device)
-}
-
-// GetFileIdentity returns the inode and device ID for a file.
-func GetFileIdentity(path string) (inode, device uint64, err error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, 0, fmt.Errorf("unable to get file identity on this platform")
-	}
-
-	return stat.Ino, uint64(stat.Dev), nil
 }

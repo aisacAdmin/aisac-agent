@@ -71,8 +71,8 @@ func TestSuricataEVEParser(t *testing.T) {
 		check   func(*LogEvent) bool
 	}{
 		{
-			name: "alert event",
-			line: `{"timestamp":"2024-01-15T10:30:00.123456+0000","flow_id":123456789,"in_iface":"eth0","event_type":"alert","src_ip":"192.168.1.100","src_port":54321,"dest_ip":"10.0.0.1","dest_port":443,"proto":"TCP","alert":{"action":"allowed","gid":1,"signature_id":2024001,"rev":1,"signature":"ET MALWARE Suspicious User-Agent","category":"A Network Trojan was detected","severity":1}}`,
+			name:    "alert event",
+			line:    `{"timestamp":"2024-01-15T10:30:00.123456+0000","flow_id":123456789,"in_iface":"eth0","event_type":"alert","src_ip":"192.168.1.100","src_port":54321,"dest_ip":"10.0.0.1","dest_port":443,"proto":"TCP","alert":{"action":"allowed","gid":1,"signature_id":2024001,"rev":1,"signature":"ET MALWARE Suspicious User-Agent","category":"A Network Trojan was detected","severity":1}}`,
 			wantErr: false,
 			check: func(e *LogEvent) bool {
 				return e.SourceIP == "192.168.1.100" &&

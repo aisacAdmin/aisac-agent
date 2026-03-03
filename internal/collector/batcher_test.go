@@ -29,7 +29,7 @@ func TestBatcher(t *testing.T) {
 	defer cancel()
 
 	// Start batcher
-	go batcher.Run(ctx)
+	go func() { _ = batcher.Run(ctx) }()
 
 	// Send 12 events (should trigger 2 flushes of 5 + 1 flush of 2 on shutdown)
 	for i := 0; i < 12; i++ {
@@ -78,7 +78,7 @@ func TestBatcherTimeBasedFlush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go batcher.Run(ctx)
+	go func() { _ = batcher.Run(ctx) }()
 
 	// Send 3 events (less than batch size)
 	for i := 0; i < 3; i++ {
@@ -126,7 +126,7 @@ func TestBatcherShutdownFlush(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		batcher.Run(ctx)
+		_ = batcher.Run(ctx)
 		close(done)
 	}()
 

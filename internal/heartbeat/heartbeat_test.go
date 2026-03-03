@@ -114,7 +114,7 @@ func TestHeartbeatSend(t *testing.T) {
 			NextHeartbeatIn: 60,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -157,7 +157,7 @@ func TestHeartbeat401StopsClient(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(Response{
+		_ = json.NewEncoder(w).Encode(Response{
 			Success: false,
 			Message: "Invalid API key",
 		})
@@ -195,7 +195,7 @@ func TestHeartbeatDynamicInterval(t *testing.T) {
 			NextHeartbeatIn: 30, // Server requests 30 second interval
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 

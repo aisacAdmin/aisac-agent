@@ -1,0 +1,39 @@
+# Stage 1: Build
+FROM golang:1.21-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates tzdata make
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
+    -o /bin/aisac-agent ./cmd/agent
+
+# Stage 2: Runtime
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata \
+    iptables ip6tables nftables \
+    && addgroup -S aisac && adduser -S aisac -G aisac
+
+COPY --from=builder /bin/aisac-agent /usr/local/bin/aisac-agent
+
+RUN mkdir -p /etc/aisac /var/lib/aisac /var/log/aisac \
+    && chown -R aisac:aisac /var/lib/aisac /var/log/aisac
+
+VOLUME ["/etc/aisac"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD pgrep aisac-agent || exit 1
+
+ENTRYPOINT ["aisac-agent"]
+CMD ["-c", "/etc/aisac/agent.yaml"]

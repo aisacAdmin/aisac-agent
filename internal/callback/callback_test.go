@@ -175,7 +175,7 @@ func TestClient_SendAgentStatus(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		decoder := json.NewDecoder(r.Body)
-		decoder.Decode(&receivedPayload)
+		_ = decoder.Decode(&receivedPayload)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()

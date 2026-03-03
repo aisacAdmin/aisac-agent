@@ -135,13 +135,13 @@ type HashMatch struct {
 
 // ThreatIntelResult represents threat intelligence lookup results.
 type ThreatIntelResult struct {
-	Source       string `json:"source"`
-	IsMalicious  bool   `json:"is_malicious"`
+	Source        string `json:"source"`
+	IsMalicious   bool   `json:"is_malicious"`
 	DetectionRate string `json:"detection_rate,omitempty"`
 	MalwareFamily string `json:"malware_family,omitempty"`
-	FirstSeen    string `json:"first_seen,omitempty"`
-	LastSeen     string `json:"last_seen,omitempty"`
-	Error        string `json:"error,omitempty"`
+	FirstSeen     string `json:"first_seen,omitempty"`
+	LastSeen      string `json:"last_seen,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // Execute checks the hash against local files and threat intelligence.
@@ -230,13 +230,13 @@ func (a *CheckHashAction) Execute(ctx context.Context, params map[string]interfa
 		Success: true,
 		Message: fmt.Sprintf("Hash check completed for %s", hash),
 		Details: map[string]interface{}{
-			"hash":                hash,
-			"hash_type":           hashType,
-			"is_malicious":        isMalicious,
-			"local_files_found":   len(localMatches),
-			"local_matches":       localMatches,
-			"threat_intel":        threatIntelResults,
-			"checked_at":          time.Now().UTC().Format(time.RFC3339),
+			"hash":              hash,
+			"hash_type":         hashType,
+			"is_malicious":      isMalicious,
+			"local_files_found": len(localMatches),
+			"local_matches":     localMatches,
+			"threat_intel":      threatIntelResults,
+			"checked_at":        time.Now().UTC().Format(time.RFC3339),
 		},
 	}, nil
 }
@@ -275,7 +275,7 @@ func (a *CheckHashAction) searchLocalFiles(ctx context.Context, targetHash, hash
 			break
 		}
 
-		filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+		_ = filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error { //nolint:errcheck // walk errors are handled inside callback
 			// Check context for cancellation
 			select {
 			case <-ctx.Done():
@@ -509,10 +509,10 @@ func (a *CheckHashAction) queryMalwareBazaar(ctx context.Context, hash string) T
 	var mbResponse struct {
 		QueryStatus string `json:"query_status"`
 		Data        []struct {
-			Signature   string `json:"signature"`
-			FirstSeen   string `json:"first_seen"`
-			LastSeen    string `json:"last_seen"`
-			FileType    string `json:"file_type"`
+			Signature string `json:"signature"`
+			FirstSeen string `json:"first_seen"`
+			LastSeen  string `json:"last_seen"`
+			FileType  string `json:"file_type"`
 		} `json:"data"`
 	}
 

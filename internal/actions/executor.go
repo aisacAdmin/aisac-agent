@@ -16,17 +16,17 @@ import (
 
 // sensitiveParamKeys contains parameter keys that should be redacted in logs.
 var sensitiveParamKeys = map[string]bool{
-	"api_key":             true,
-	"apikey":              true,
-	"api-key":             true,
-	"token":               true,
-	"password":            true,
-	"secret":              true,
-	"credential":          true,
-	"virustotal_api_key":  true,
-	"otx_api_key":         true,
-	"abuseipdb_api_key":   true,
-	"auth_token":          true,
+	"api_key":            true,
+	"apikey":             true,
+	"api-key":            true,
+	"token":              true,
+	"password":           true,
+	"secret":             true,
+	"credential":         true,
+	"virustotal_api_key": true,
+	"otx_api_key":        true,
+	"abuseipdb_api_key":  true,
+	"auth_token":         true,
 }
 
 // sanitizeParamsForLogging removes sensitive values from params before logging.
