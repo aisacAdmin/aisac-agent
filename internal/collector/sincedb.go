@@ -139,4 +139,3 @@ func (s *SinceDB) RemoveStale(maxAge time.Duration) {
 func (s *SinceDB) fileKey(path string, inode, device uint64) string {
 	return fmt.Sprintf("%s|%d|%d", path, inode, device)
 }
-

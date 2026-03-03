@@ -33,21 +33,21 @@ var Version = "dev"
 
 // Agent represents the AISAC agent.
 type Agent struct {
-	cfg        *config.AgentConfig
-	logger     zerolog.Logger
-	conn       *websocket.Conn
-	connMu     sync.Mutex
-	executor   *actions.Executor
-	callback   *callback.Client
-	collector  *collector.Collector
-	heartbeat  *heartbeat.Client
-	safety     *safety.Manager
-	info       types.AgentInfo
-	infoMu     sync.RWMutex // Protects info.Status
+	cfg       *config.AgentConfig
+	logger    zerolog.Logger
+	conn      *websocket.Conn
+	connMu    sync.Mutex
+	executor  *actions.Executor
+	callback  *callback.Client
+	collector *collector.Collector
+	heartbeat *heartbeat.Client
+	safety    *safety.Manager
+	info      types.AgentInfo
+	infoMu    sync.RWMutex // Protects info.Status
 
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	activeTasks      map[string]context.CancelFunc
 	activeTasksMu    sync.Mutex

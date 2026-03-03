@@ -35,10 +35,10 @@ func TestNewMessage(t *testing.T) {
 
 func TestMessage_ParsePayload(t *testing.T) {
 	original := Command{
-		ID:            "cmd-123",
-		Action:        types.ActionBlockIP,
-		Parameters:    map[string]interface{}{"ip_address": "192.168.1.1"},
-		ExecutionID:   "exec-456",
+		ID:             "cmd-123",
+		Action:         types.ActionBlockIP,
+		Parameters:     map[string]interface{}{"ip_address": "192.168.1.1"},
+		ExecutionID:    "exec-456",
 		TimeoutSeconds: 30,
 	}
 
@@ -67,12 +67,12 @@ func TestMessage_ParsePayload(t *testing.T) {
 
 func TestCommand_JSON(t *testing.T) {
 	cmd := Command{
-		ID:            "cmd-123",
-		Action:        types.ActionBlockIP,
-		Parameters:    map[string]interface{}{"ip_address": "192.168.1.1", "duration": float64(3600)},
-		ExecutionID:   "exec-456",
+		ID:             "cmd-123",
+		Action:         types.ActionBlockIP,
+		Parameters:     map[string]interface{}{"ip_address": "192.168.1.1", "duration": float64(3600)},
+		ExecutionID:    "exec-456",
 		TimeoutSeconds: 30,
-		Priority:      1,
+		Priority:       1,
 	}
 
 	data, err := json.Marshal(cmd)

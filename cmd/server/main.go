@@ -54,14 +54,14 @@ type Server struct {
 
 // AgentConn represents a connected agent.
 type AgentConn struct {
-	ID          string
-	Info        types.AgentInfo
-	Conn        *websocket.Conn
-	ConnMu      sync.Mutex
-	LastSeen    time.Time
-	msgCount    int64     // Message count for rate limiting
-	msgResetAt  time.Time // When to reset message count
-	stopPing    chan struct{} // Signal to stop ping loop
+	ID         string
+	Info       types.AgentInfo
+	Conn       *websocket.Conn
+	ConnMu     sync.Mutex
+	LastSeen   time.Time
+	msgCount   int64         // Message count for rate limiting
+	msgResetAt time.Time     // When to reset message count
+	stopPing   chan struct{} // Signal to stop ping loop
 }
 
 func main() {

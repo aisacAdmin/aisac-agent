@@ -56,16 +56,16 @@ func (a *CheckIPReputationAction) Validate(params map[string]interface{}) error 
 
 // IPReputationResult represents the reputation check result from a single source.
 type IPReputationResult struct {
-	Source          string  `json:"source"`
-	IsMalicious     bool    `json:"is_malicious"`
-	AbuseScore      float64 `json:"abuse_score,omitempty"`
-	TotalReports    int     `json:"total_reports,omitempty"`
-	Country         string  `json:"country,omitempty"`
-	ISP             string  `json:"isp,omitempty"`
-	Domain          string  `json:"domain,omitempty"`
-	Categories      []string `json:"categories,omitempty"`
-	LastReportedAt  string  `json:"last_reported_at,omitempty"`
-	Error           string  `json:"error,omitempty"`
+	Source         string   `json:"source"`
+	IsMalicious    bool     `json:"is_malicious"`
+	AbuseScore     float64  `json:"abuse_score,omitempty"`
+	TotalReports   int      `json:"total_reports,omitempty"`
+	Country        string   `json:"country,omitempty"`
+	ISP            string   `json:"isp,omitempty"`
+	Domain         string   `json:"domain,omitempty"`
+	Categories     []string `json:"categories,omitempty"`
+	LastReportedAt string   `json:"last_reported_at,omitempty"`
+	Error          string   `json:"error,omitempty"`
 }
 
 // Execute checks the IP reputation against various threat intelligence sources.

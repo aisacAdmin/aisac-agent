@@ -135,4 +135,3 @@ func getMemoryPercentRuntime() float64 {
 	// Return 0 if we can't get accurate system memory
 	return 0
 }
-

@@ -28,12 +28,12 @@ type AgentConfig struct {
 
 // RegistrationSettings contains platform registration configuration.
 type RegistrationSettings struct {
-	Enabled             bool   `yaml:"enabled"`
-	URL                 string `yaml:"url"`
-	APIKey              string `yaml:"api_key"`
-	AssetID             string `yaml:"asset_id"`
-	CommandServerURL    string `yaml:"command_server_url"`
-	CommandServerToken  string `yaml:"command_server_token"`
+	Enabled            bool   `yaml:"enabled"`
+	URL                string `yaml:"url"`
+	APIKey             string `yaml:"api_key"`
+	AssetID            string `yaml:"asset_id"`
+	CommandServerURL   string `yaml:"command_server_url"`
+	CommandServerToken string `yaml:"command_server_token"`
 }
 
 // AgentSettings contains agent-specific settings.
@@ -47,11 +47,11 @@ type AgentSettings struct {
 
 // ServerSettings contains server connection settings.
 type ServerSettings struct {
-	Enabled         bool          `yaml:"enabled"`
-	URL             string        `yaml:"url"`
-	ConnectTimeout  time.Duration `yaml:"connect_timeout"`
-	WriteTimeout    time.Duration `yaml:"write_timeout"`
-	ReadTimeout     time.Duration `yaml:"read_timeout"`
+	Enabled        bool          `yaml:"enabled"`
+	URL            string        `yaml:"url"`
+	ConnectTimeout time.Duration `yaml:"connect_timeout"`
+	WriteTimeout   time.Duration `yaml:"write_timeout"`
+	ReadTimeout    time.Duration `yaml:"read_timeout"`
 }
 
 // TLSSettings contains mTLS configuration.
@@ -65,9 +65,9 @@ type TLSSettings struct {
 
 // ActionsSettings contains action execution settings.
 type ActionsSettings struct {
-	Enabled       []string               `yaml:"enabled"`
-	RateLimits    map[string]RateLimit   `yaml:"rate_limits"`
-	DefaultTimeout time.Duration         `yaml:"default_timeout"`
+	Enabled        []string             `yaml:"enabled"`
+	RateLimits     map[string]RateLimit `yaml:"rate_limits"`
+	DefaultTimeout time.Duration        `yaml:"default_timeout"`
 }
 
 // RateLimit defines rate limiting for an action.
@@ -78,10 +78,10 @@ type RateLimit struct {
 
 // LoggingSettings contains logging configuration.
 type LoggingSettings struct {
-	Level      string `yaml:"level"`
-	Format     string `yaml:"format"`
-	Output     string `yaml:"output"`
-	File       string `yaml:"file"`
+	Level  string `yaml:"level"`
+	Format string `yaml:"format"`
+	Output string `yaml:"output"`
+	File   string `yaml:"file"`
 }
 
 // CallbackSettings contains SOAR callback configuration.
@@ -163,8 +163,8 @@ func DefaultAgentConfig() *AgentConfig {
 			RetryAttempts: 3,
 			RetryDelay:    5 * time.Second,
 		},
-		Collector:    *collector.DefaultConfig(),
-		Heartbeat:    heartbeat.DefaultConfig(),
+		Collector: *collector.DefaultConfig(),
+		Heartbeat: heartbeat.DefaultConfig(),
 		Registration: RegistrationSettings{
 			Enabled: false,
 		},
