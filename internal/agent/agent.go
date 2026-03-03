@@ -2,11 +2,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -187,6 +189,9 @@ func (a *Agent) Run() error {
 		}
 	}
 
+	// Register with AISAC platform (sends command_server_url/token to DB)
+	a.registerWithPlatform()
+
 	// If SOAR server is disabled, just wait for shutdown (collector/heartbeat run independently)
 	if !a.cfg.Server.Enabled {
 		a.logger.Info().Msg("SOAR server disabled, running in collector/heartbeat-only mode")
@@ -270,6 +275,105 @@ func (a *Agent) Shutdown() {
 
 	a.closeConn()
 	a.wg.Wait()
+}
+
+// registerWithPlatform sends a one-time registration to the AISAC platform
+// (agent-webhook) so it knows the agent's command_server_url and token.
+func (a *Agent) registerWithPlatform() {
+	reg := a.cfg.Registration
+	if !reg.Enabled || reg.URL == "" {
+		return
+	}
+
+	// Use heartbeat api_key and asset_id as defaults if not set in registration
+	apiKey := reg.APIKey
+	if apiKey == "" {
+		apiKey = a.cfg.Heartbeat.APIKey
+	}
+	assetID := reg.AssetID
+	if assetID == "" {
+		assetID = a.cfg.Heartbeat.AssetID
+	}
+
+	if apiKey == "" || assetID == "" {
+		a.logger.Warn().Msg("Platform registration skipped: missing api_key or asset_id")
+		return
+	}
+
+	hostname, _ := os.Hostname()
+
+	// Determine capabilities
+	capabilities := []string{}
+	if a.cfg.Collector.Enabled {
+		capabilities = append(capabilities, "collector")
+	}
+	if a.cfg.Server.Enabled {
+		capabilities = append(capabilities, "soar")
+	}
+	if a.cfg.Heartbeat.Enabled {
+		capabilities = append(capabilities, "heartbeat")
+	}
+
+	payload := map[string]interface{}{
+		"event":    "agent_registered",
+		"asset_id": assetID,
+		"agent_info": map[string]interface{}{
+			"agent_id":     a.info.ID,
+			"hostname":     hostname,
+			"os":           runtime.GOOS,
+			"arch":         runtime.GOARCH,
+			"version":      Version,
+			"capabilities": capabilities,
+		},
+	}
+
+	if reg.CommandServerURL != "" {
+		payload["command_server_url"] = reg.CommandServerURL
+	}
+	if reg.CommandServerToken != "" {
+		payload["command_server_token"] = reg.CommandServerToken
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		a.logger.Error().Err(err).Msg("Failed to marshal platform registration payload")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", reg.URL, bytes.NewReader(body))
+	if err != nil {
+		a.logger.Error().Err(err).Msg("Failed to create platform registration request")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("User-Agent", "AISAC-Agent/"+Version)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		a.logger.Warn().Err(err).Msg("Platform registration failed, will retry on next restart")
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+		a.logger.Info().
+			Str("url", reg.URL).
+			Str("asset_id", assetID).
+			Bool("has_cs_url", reg.CommandServerURL != "").
+			Msg("Platform registration successful")
+	} else {
+		a.logger.Warn().
+			Int("status", resp.StatusCode).
+			Str("body", string(respBody)).
+			Msg("Platform registration returned non-OK status")
+	}
 }
 
 func (a *Agent) connect() error {

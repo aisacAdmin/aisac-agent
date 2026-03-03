@@ -242,4 +242,4 @@ collector:
 | `AISAC_COLLECTOR_API_KEY` | Collector API key |
 | `AISAC_CS_TOKEN` | Command Server API token (for SOAR) |
 | `AISAC_CS_URL` | Command Server public URL (for SOAR) |
-| `AISAC_REGISTER_URL` | Override registration endpoint (for staging) |
+| `AISAC_PLATFORM_URL` | Platform base URL (default: `https://api.aisac.cisec.es`). All endpoints (heartbeat, logs, register) are derived from this. |

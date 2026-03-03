@@ -9,6 +9,11 @@
 #   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh | \
 #     sudo AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true bash
 #
+# Staging:
+#   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/quick-install.sh | \
+#     sudo AISAC_PLATFORM_URL=https://staging-api.aisac.cisec.es \
+#     AISAC_API_KEY=aisac_xxx AISAC_ASSET_ID=uuid-here AISAC_NONINTERACTIVE=true bash
+#
 
 set -e
 
@@ -61,7 +66,7 @@ LATEST=$(curl -fs "https://api.github.com/repos/${REPO}/releases/latest" | grep 
 
 if [ -z "$LATEST" ]; then
     echo -e "${YELLOW}Could not fetch latest release. Using fallback version...${NC}"
-    LATEST="v1.0.4"
+    LATEST="v1.0.5"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY_NAME}-${OS}-${ARCH}"
 else
     echo "Latest version: $LATEST"
@@ -112,18 +117,15 @@ if [ "${AISAC_NONINTERACTIVE:-false}" = "true" ]; then
     export AISAC_NONINTERACTIVE
     export AISAC_API_KEY
     export AISAC_ASSET_ID
+    export AISAC_PLATFORM_URL
     export AISAC_SOAR
     export AISAC_COLLECTOR
     export AISAC_HEARTBEAT
+    export AISAC_CS_TOKEN
+    export AISAC_CS_URL
     /tmp/aisac-install.sh
 else
-    echo "Run the configuration wizard:"
-    echo -e "  ${CYAN}sudo /tmp/aisac-install.sh${NC}"
+    echo -e "${GREEN}Launching configuration wizard...${NC}"
     echo ""
-    echo "Or for automated deployment:"
-    echo -e "  ${CYAN}sudo AISAC_API_KEY=xxx AISAC_ASSET_ID=uuid AISAC_NONINTERACTIVE=true /tmp/aisac-install.sh${NC}"
-    echo ""
-    echo "Or configure manually:"
-    echo -e "  ${CYAN}nano ${CONFIG_DIR}/agent.yaml${NC}"
-    echo ""
+    /tmp/aisac-install.sh
 fi
