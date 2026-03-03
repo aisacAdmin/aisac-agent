@@ -9,8 +9,8 @@ Guia para instalar el agente AISAC en servidores y estaciones de trabajo Linux y
 3. [Obtener credenciales](#3-obtener-credenciales)
 4. [Instalacion en Linux](#4-instalacion-en-linux)
 5. [Instalacion en Windows](#5-instalacion-en-windows)
-6. [Verificacion post-instalacion](#6-verificacion-post-instalacion)
-7. [Instalacion no interactiva](#7-instalacion-no-interactiva)
+6. [Modo SOAR](#6-modo-soar)
+7. [Verificacion post-instalacion](#7-verificacion-post-instalacion)
 8. [Que se configura automaticamente](#8-que-se-configura-automaticamente)
 9. [Desinstalacion](#9-desinstalacion)
 10. [Resolucion de problemas](#10-resolucion-de-problemas)
@@ -26,6 +26,12 @@ El instalador configura automaticamente dos componentes en cada endpoint:
 | **Wazuh Agent** | Agente HIDS que reporta al Wazuh Manager centralizado |
 | **AISAC Agent** | Heartbeat de estado + reenvio de logs locales a la plataforma AISAC |
 
+Opcionalmente, con el flag `--soar` / `-Soar`, tambien instala:
+
+| Componente | Descripcion |
+|------------|-------------|
+| **Command Server** | Servidor WebSocket con mTLS para recibir acciones SOAR |
+
 ### Arquitectura
 
 ```
@@ -37,6 +43,7 @@ El instalador configura automaticamente dos componentes en cada endpoint:
   │  AISAC Agent ──────────────────────> Plataforma AISAC (HTTPS 443)
   │    - Heartbeat (estado)          │
   │    - Collector (logs locales)    │
+  │    - SOAR (acciones, opcional)   │
   └──────────────────────────────────┘
 ```
 
@@ -96,73 +103,89 @@ La IP (publica o privada) del servidor donde esta instalado el Wazuh Manager.
 2. Ve a **Assets** y crea el asset que representa a este endpoint
 3. Copia la **API Key** (formato: `aisac_xxxx...`)
 
-
 ### 3.3 Auth Token (JWT)
 
 Token JWT proporcionado por el administrador de la plataforma. Necesario para autenticarse contra el gateway de la API.
+
+> **Nota**: Los tres parametros son obligatorios. Sin ellos la instalacion no se iniciara.
 
 ---
 
 ## 4. Instalacion en Linux
 
-### Paso 1: Descargar el instalador
+### Paso 1: Descargar los scripts
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install.sh -o install.sh
+curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install-wazuh-agent.sh -o install-wazuh-agent.sh
+curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install-aisac-agent.sh -o install-aisac-agent.sh
+chmod +x install.sh install-wazuh-agent.sh install-aisac-agent.sh
 ```
+
+> **Nota**: Los tres scripts deben estar en la misma carpeta. `install.sh` es el orquestador que llama a los otros dos.
 
 ### Paso 2: Ejecutar el instalador
 
 ```bash
-sudo bash install.sh -m <MANAGER_IP> -k <API_KEY> -t <AUTH_TOKEN>
+sudo ./install.sh -k <API_KEY> -t <AUTH_TOKEN> -m <MANAGER_IP>
 ```
 
 **Ejemplo:**
 
 ```bash
-sudo bash install.sh \
-  -m 54.78.120.30 \
+sudo ./install.sh \
   -k aisac_abc123def456 \
-  -t eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  -t eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... \
+  -m 54.78.120.30
 ```
 
 ### Parametros
 
 | Parametro | Obligatorio | Descripcion |
 |-----------|-------------|-------------|
-| `-m <MANAGER_IP>` | Si | IP del Wazuh Manager |
 | `-k <API_KEY>` | Si | API Key del asset en la plataforma AISAC |
-| `-t <AUTH_TOKEN>` | No | Token JWT para autenticacion con el gateway |
-| `-u <URL>` | No | URL del endpoint install-config (por defecto: produccion) |
-| `-h` | No | Mostrar ayuda |
-
-> Si no se pasa `-k`, el script lo solicita de forma interactiva.
+| `-t <AUTH_TOKEN>` | Si | Token JWT para autenticacion con el gateway |
+| `-m <MANAGER_IP>` | Si | IP del Wazuh Manager |
+| `-u <URL>` | No | URL del endpoint install-config (por defecto: `https://api.aisac.cisec.es/functions/v1/install-config`) |
+| `--soar` | No | Habilitar modo SOAR (Command Server + certificados mTLS) |
+| `--uninstall` | No | Desinstalar AISAC Agent, Command Server y Wazuh Agent |
+| `-h, --help` | No | Mostrar ayuda |
 
 ### Que hace el instalador
 
 ```
   Step 1/2: Instalar Wazuh Agent
-    - Llama al endpoint install-config para obtener la configuracion
+    - Llama al endpoint install-config con la API Key para obtener la configuracion
     - Descarga e instala el paquete Wazuh Agent
-    - Configura la conexion al Manager
+    - Configura la conexion al Manager (IP, puerto, grupo, nombre)
     - Inicia el servicio wazuh-agent
 
   Step 2/2: Instalar AISAC Agent
     - Instala el binario aisac-agent
     - Genera la configuracion (heartbeat + collector)
+    - Auto-detecta fuentes de logs locales (Suricata, Wazuh alerts, Syslog)
     - Instala e inicia el servicio systemd
+    - Si --soar: genera certificados mTLS, instala Command Server
 ```
 
 ### Estructura de directorios
 
 ```
 /opt/aisac/
-  aisac-agent                    # Binario
+  aisac-agent                    # Binario del agente
+  aisac-server                   # Binario del Command Server (solo con --soar)
 
 /etc/aisac/
   agent.yaml                     # Configuracion
+  certs/                         # Certificados mTLS (solo con --soar)
+    ca.crt
+    agent.crt
+    agent.key
+    server.crt
+    server.key
 
 /var/lib/aisac/
+  agent-id                       # ID persistente del agente
   sincedb.json                   # Posicion de lectura de logs
   safety_state.json              # Estado interno
 
@@ -195,36 +218,41 @@ $baseUrl = "https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/script
 Abrir PowerShell **como Administrador**:
 
 ```powershell
-.\install.ps1 -ManagerIp <MANAGER_IP> -ApiKey <API_KEY> -AuthToken <AUTH_TOKEN>
+.\install.ps1 -ApiKey <API_KEY> -AuthToken <AUTH_TOKEN> -ManagerIp <MANAGER_IP>
 ```
 
 **Ejemplo:**
 
 ```powershell
 .\install.ps1 `
-  -ManagerIp 54.78.120.30 `
   -ApiKey aisac_abc123def456 `
-  -AuthToken eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  -AuthToken eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... `
+  -ManagerIp 54.78.120.30
 ```
 
 ### Parametros
 
 | Parametro | Obligatorio | Descripcion |
 |-----------|-------------|-------------|
+| `-ApiKey` | Si | API Key del asset en la plataforma AISAC |
+| `-AuthToken` | Si | Token JWT para autenticacion con el gateway |
 | `-ManagerIp` | Si | IP del Wazuh Manager |
-| `-ApiKey` | No | API Key del asset (se solicita si no se pasa) |
-| `-AuthToken` | No | Token JWT para autenticacion con el gateway |
-| `-RegisterUrl` | No | URL del endpoint install-config |
+| `-ConfigUrl` | No | URL del endpoint install-config (por defecto: produccion) |
+| `-Soar` | No | Habilitar modo SOAR (Command Server + certificados mTLS) |
+| `-Uninstall` | No | Desinstalar AISAC Agent, Command Server y Wazuh Agent |
+| `-Help` | No | Mostrar ayuda |
 
 ### Estructura de directorios
 
 ```
 C:\Program Files\AISAC\
-  aisac-agent.exe                # Binario
-  nssm.exe                      # Wrapper de servicios
+  aisac-agent.exe                # Binario del agente
+  aisac-server.exe               # Binario del Command Server (solo con -Soar)
+  nssm.exe                       # Wrapper de servicios
 
 C:\ProgramData\AISAC\
   agent.yaml                     # Configuracion
+  certs\                         # Certificados mTLS (solo con -Soar)
   data\                          # Datos persistentes
   logs\
     agent.log                    # Logs del agente
@@ -234,9 +262,64 @@ C:\ProgramData\AISAC\
 
 ---
 
-## 6. Verificacion post-instalacion
+## 6. Modo SOAR
 
-### 6.1 Comprobar servicios
+El modo SOAR habilita la ejecucion de acciones de respuesta a incidentes desde la plataforma AISAC.
+
+### Activar modo SOAR
+
+**Linux:**
+
+```bash
+sudo ./install.sh -k <API_KEY> -t <AUTH_TOKEN> -m <MANAGER_IP> --soar
+```
+
+**Windows:**
+
+```powershell
+.\install.ps1 -ApiKey <API_KEY> -AuthToken <AUTH_TOKEN> -ManagerIp <MANAGER_IP> -Soar
+```
+
+### Que se instala adicionalmente
+
+- **Command Server**: Servidor WebSocket que recibe comandos de la plataforma
+- **Certificados mTLS**: CA autofirmada + certificados de agente y servidor para comunicacion segura
+- **Registro del agente**: El agente se registra automaticamente en la plataforma con la URL y token del Command Server
+
+### Servicios adicionales
+
+**Linux:**
+
+```bash
+sudo systemctl status aisac-server    # Command Server
+```
+
+**Windows:**
+
+```powershell
+Get-Service AISACServer               # Command Server
+```
+
+### Acciones SOAR disponibles
+
+| Accion | Descripcion |
+|--------|-------------|
+| `block_ip` / `unblock_ip` | Bloquear/desbloquear IP en el firewall |
+| `isolate_host` / `unisolate_host` | Aislar/restaurar conectividad de red |
+| `disable_user` / `enable_user` | Deshabilitar/habilitar cuenta de usuario |
+| `kill_process` | Terminar un proceso |
+| `dns_lookup` | Resolucion DNS |
+| `check_hash` | Consultar reputacion de hash |
+| `check_ip_reputation` | Consultar reputacion de IP |
+| `search_ioc` | Buscar indicadores de compromiso |
+| `collect_forensics` | Recopilar evidencia forense |
+| `threat_hunt` | Buscar actividad sospechosa |
+
+---
+
+## 7. Verificacion post-instalacion
+
+### 7.1 Comprobar servicios
 
 **Linux:**
 
@@ -246,6 +329,9 @@ sudo systemctl status wazuh-agent
 
 # AISAC Agent
 sudo systemctl status aisac-agent
+
+# Command Server (solo con --soar)
+sudo systemctl status aisac-server
 ```
 
 **Windows:**
@@ -256,11 +342,14 @@ Get-Service WazuhSvc
 
 # AISAC Agent
 Get-Service AISACAgent
+
+# Command Server (solo con -Soar)
+Get-Service AISACServer
 ```
 
-Ambos deben estar en estado **Running**.
+Todos deben estar en estado **Running**.
 
-### 6.2 Verificar conexion con el Manager
+### 7.2 Verificar conexion con el Manager
 
 **Linux:**
 
@@ -279,7 +368,7 @@ sudo tail -20 /var/ossec/logs/ossec.log
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 20
 ```
 
-### 6.3 Verificar heartbeat AISAC
+### 7.3 Verificar heartbeat AISAC
 
 **Linux:**
 
@@ -297,39 +386,6 @@ Buscar mensajes de heartbeat exitosos. En la plataforma AISAC, el asset debe apa
 
 ---
 
-## 7. Instalacion no interactiva
-
-Para despliegues automatizados con herramientas como Ansible, Puppet o scripts:
-
-### Linux
-
-```bash
-# Usando variables de entorno
-AISAC_API_KEY="aisac_abc123" \
-AISAC_AUTH_TOKEN="eyJhbG..." \
-sudo -E bash install.sh -m 54.78.120.30
-
-# O con todos los parametros en linea
-sudo bash install.sh \
-  -m 54.78.120.30 \
-  -k aisac_abc123 \
-  -t eyJhbG...
-```
-
-### Windows
-
-```powershell
-# Usando variables de entorno
-$env:AISAC_API_KEY = "aisac_abc123"
-$env:AISAC_AUTH_TOKEN = "eyJhbG..."
-.\install.ps1 -ManagerIp 54.78.120.30
-
-# O con todos los parametros
-.\install.ps1 -ManagerIp 54.78.120.30 -ApiKey aisac_abc123 -AuthToken eyJhbG...
-```
-
----
-
 ## 8. Que se configura automaticamente
 
 El instalador genera la configuracion en base a la respuesta del endpoint `install-config`:
@@ -337,16 +393,19 @@ El instalador genera la configuracion en base a la respuesta del endpoint `insta
 | Componente | Configuracion |
 |------------|---------------|
 | **Wazuh Agent** | IP y puerto del Manager, nombre del agente, grupo del tenant |
-| **Heartbeat** | URL, API Key, Asset ID, intervalo de 120s |
-| **Collector** | Solo se habilita si detecta fuentes de logs locales (ej. Suricata) |
-| **Acciones SOAR** | Configuradas pero deshabilitadas (servidor SOAR no conectado) |
-| **Safety** | Auto-revert habilitado con TTL por accion |
+| **Heartbeat** | URL, API Key, Asset ID, Auth Token, intervalo de 120s |
+| **Collector** | Se habilita automaticamente si detecta fuentes de logs locales |
+| **SOAR** | Command Server + mTLS + registro (solo con `--soar` / `-Soar`) |
 
 ### Fuentes de logs auto-detectadas
 
-| Fuente | Ruta (Linux) | Ruta (Windows) |
-|--------|-------------|----------------|
-| Suricata EVE | `/var/log/suricata/eve.json` | `C:\Program Files\Suricata\log\eve.json` |
+El instalador busca automaticamente las siguientes fuentes y habilita el collector si encuentra alguna:
+
+| Fuente | Parser | Ruta (Linux) | Ruta (Windows) |
+|--------|--------|-------------|----------------|
+| Suricata EVE | `suricata_eve` | `/var/log/suricata/eve.json` | `C:\Program Files\Suricata\log\eve.json` |
+| Wazuh Alerts | `wazuh_alerts` | `/var/ossec/logs/alerts/alerts.json` | `C:\Program Files (x86)\ossec-agent\logs\alerts\alerts.json` |
+| Syslog | `syslog` | `/var/log/syslog` o `/var/log/messages` | — |
 
 > Si no se detecta ninguna fuente, el collector queda deshabilitado. Se puede habilitar manualmente editando `agent.yaml`.
 
@@ -354,19 +413,40 @@ El instalador genera la configuracion en base a la respuesta del endpoint `insta
 
 ## 9. Desinstalacion
 
-### Linux
+El instalador incluye un flag de desinstalacion que elimina AISAC Agent, Command Server y Wazuh Agent.
+
+### Usando el instalador (recomendado)
+
+**Linux:**
+
+```bash
+sudo ./install.sh --uninstall
+```
+
+**Windows:**
+
+```powershell
+.\install.ps1 -Uninstall
+```
+
+El proceso pedira confirmacion antes de proceder y preguntara si desea eliminar tambien la configuracion, datos y certificados.
+
+### Desinstalacion manual
+
+**Linux:**
 
 ```bash
 # Parar y deshabilitar servicios
-sudo systemctl stop aisac-agent
-sudo systemctl disable aisac-agent
+sudo systemctl stop aisac-agent aisac-server
+sudo systemctl disable aisac-agent aisac-server
 sudo systemctl stop wazuh-agent
 sudo systemctl disable wazuh-agent
 
 # Eliminar AISAC
 sudo rm -f /etc/systemd/system/aisac-agent.service
+sudo rm -f /etc/systemd/system/aisac-server.service
 sudo rm -rf /opt/aisac /etc/aisac /var/lib/aisac /var/log/aisac
-sudo rm -f /usr/local/bin/aisac-agent
+sudo rm -f /usr/local/bin/aisac-agent /usr/local/bin/aisac-server
 
 # Eliminar Wazuh Agent
 sudo dpkg --purge wazuh-agent    # Debian/Ubuntu
@@ -376,32 +456,47 @@ sudo rpm -e wazuh-agent          # CentOS/RHEL
 sudo systemctl daemon-reload
 ```
 
-### Windows
+**Windows:**
 
 ```powershell
 # Parar servicios
-Stop-Service AISACAgent -Force -ErrorAction SilentlyContinue
-Stop-Service WazuhSvc -Force -ErrorAction SilentlyContinue
+Stop-Service AISACAgent, AISACServer, WazuhSvc -Force -ErrorAction SilentlyContinue
 
-# Eliminar servicio AISAC (con NSSM)
-& "C:\Program Files\AISAC\nssm.exe" remove AISACAgent confirm
+# Eliminar servicios AISAC
+sc.exe delete AISACAgent
+sc.exe delete AISACServer
 
 # Eliminar archivos AISAC
 Remove-Item "C:\Program Files\AISAC" -Recurse -Force
 Remove-Item "C:\ProgramData\AISAC" -Recurse -Force
 
 # Desinstalar Wazuh Agent
-msiexec.exe /x wazuh-agent /q
+$wazuh = Get-WmiObject -Class Win32_Product | Where-Object { $_.Name -like "Wazuh Agent*" }
+if ($wazuh) { $wazuh.Uninstall() }
 ```
 
 ---
 
 ## 10. Resolucion de problemas
 
+### El instalador falla con "API Key is required"
+
+```
+[ERROR] API Key is required (-k)
+```
+
+**Causa**: No se han pasado todos los parametros obligatorios.
+
+**Solucion**: Asegurar que se pasan los tres parametros requeridos:
+
+```bash
+sudo ./install.sh -k <API_KEY> -t <AUTH_TOKEN> -m <MANAGER_IP>
+```
+
 ### El instalador falla con HTTP 401
 
 ```
-[ERROR] agent-register returned HTTP 401
+[ERROR] install-config returned HTTP 401
 ```
 
 **Causa**: La API Key o el Auth Token no son validos.
