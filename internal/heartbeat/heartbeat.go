@@ -24,6 +24,7 @@ type Config struct {
 	Interval      time.Duration `yaml:"interval"`
 	Timeout       time.Duration `yaml:"timeout"`
 	SkipTLSVerify bool          `yaml:"skip_tls_verify"`
+	AuthToken     string        `yaml:"auth_token"` // Supabase anon key for Authorization header
 
 	// Safety: auto-recovery on consecutive failures
 	FailureThreshold int      `yaml:"failure_threshold"` // Number of consecutive failures before triggering recovery
@@ -219,6 +220,9 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", c.cfg.APIKey)
+	if c.cfg.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.AuthToken)
+	}
 	req.Header.Set("User-Agent", "AISAC-Agent/"+c.version)
 
 	resp, err := c.httpClient.Do(req)
