@@ -81,11 +81,11 @@ func TestSuricataEVEParser(t *testing.T) {
 			},
 		},
 		{
-			name: "dns event",
-			line: `{"timestamp":"2024-01-15T10:30:00.123456+0000","flow_id":123456789,"event_type":"dns","src_ip":"192.168.1.100","dest_ip":"8.8.8.8","dns":{"type":"query","rrname":"example.com","rrtype":"A"}}`,
+			name:    "dns event (filtered as telemetry)",
+			line:    `{"timestamp":"2024-01-15T10:30:00.123456+0000","flow_id":123456789,"event_type":"dns","src_ip":"192.168.1.100","dest_ip":"8.8.8.8","dns":{"type":"query","rrname":"example.com","rrtype":"A"}}`,
 			wantErr: false,
 			check: func(e *LogEvent) bool {
-				return strings.Contains(e.Message, "example.com")
+				return e == nil
 			},
 		},
 		{

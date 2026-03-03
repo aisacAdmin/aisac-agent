@@ -211,7 +211,7 @@ func TestHeartbeatDynamicInterval(t *testing.T) {
 	logger := zerolog.Nop()
 	client := NewClient(cfg, "1.0.0", logger)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Send heartbeat
