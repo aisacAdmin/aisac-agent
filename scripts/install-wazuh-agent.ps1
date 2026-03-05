@@ -4,7 +4,7 @@
 # then installs the Wazuh Agent pointing to the centralized Wazuh Manager.
 #
 # Usage:
-#   .\install-wazuh-agent.ps1 -ApiKey <api_key> -RegisterUrl <url>
+#   .\install-wazuh-agent.ps1 -ApiKey <api_key> -RegisterUrl <url> -ManagerIp <ip>
 #
 # Outputs:
 #   C:\Windows\Temp\aisac-register.json  - Used by install-aisac-agent.ps1
@@ -15,7 +15,12 @@ param(
     [string]$ApiKey,
 
     [Parameter(Mandatory=$true)]
-    [string]$RegisterUrl
+    [string]$RegisterUrl,
+
+    [Parameter(Mandatory=$true)]
+    [string]$ManagerIp,
+
+    [string]$AuthToken = ""
 )
 
 Set-StrictMode -Version Latest
@@ -36,10 +41,14 @@ function Invoke-Register {
     Write-Info "Calling agent-register: $RegisterUrl"
 
     try {
+        $headers = @{ "X-API-Key" = $ApiKey }
+        if ($AuthToken) {
+            $headers["Authorization"] = "Bearer $AuthToken"
+        }
         $response = Invoke-RestMethod `
             -Uri $RegisterUrl `
             -Method GET `
-            -Headers @{ "X-API-Key" = $ApiKey }
+            -Headers $headers
     } catch {
         Write-Fail "agent-register failed: $($_.Exception.Message)"
         exit 1
@@ -112,14 +121,14 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 # 1. Call agent-register
 $data = Invoke-Register
 
-# 2. Parse config
-$managerIp   = $data.wazuh.manager_ip
+# 2. Parse config (Manager IP comes from CLI parameter)
 $managerPort = $data.wazuh.manager_port
 $agentGroup  = $data.wazuh.agent_group
 $assetName   = if ($data.PSObject.Properties["asset_name"] -and $data.asset_name) { $data.asset_name } else { $env:COMPUTERNAME }
+$managerIp   = $ManagerIp
 
-if (-not $managerIp -or -not $agentGroup) {
-    Write-Fail "Missing wazuh config in agent-register response"
+if (-not $agentGroup) {
+    Write-Fail "Missing wazuh.agent_group in agent-register response"
     Write-Fail "Response: $($data | ConvertTo-Json -Depth 5 -Compress)"
     exit 1
 }

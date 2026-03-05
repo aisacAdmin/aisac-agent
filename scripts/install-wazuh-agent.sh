@@ -6,7 +6,7 @@
 # then installs the Wazuh Agent pointing to the centralized Wazuh Manager.
 #
 # Usage:
-#   ./install-wazuh-agent.sh <api_key> <register_url>
+#   ./install-wazuh-agent.sh <api_key> <register_url> <auth_token> <manager_ip>
 #
 # Outputs:
 #   /tmp/aisac-register.json  - Full response from agent-register (used by install-aisac-agent.sh)
@@ -64,12 +64,19 @@ print(val if val else '')
 call_register() {
     local api_key="$1"
     local register_url="$2"
+    local auth_token="${3:-}"
 
     log_info "Calling agent-register: ${register_url}"
 
+    local auth_header=""
+    if [ -n "$auth_token" ]; then
+        auth_header="Authorization: Bearer ${auth_token}"
+    fi
+
     local response http_code
     response=$(curl -s -w "\n%{http_code}" -X GET "${register_url}" \
-        -H "X-API-Key: ${api_key}" 2>/dev/null)
+        -H "X-API-Key: ${api_key}" \
+        ${auth_header:+-H "$auth_header"} 2>/dev/null)
     http_code=$(echo "$response" | tail -n1)
     response=$(echo "$response" | sed '$d')
 
@@ -183,9 +190,11 @@ install_wazuh_agent() {
 main() {
     local api_key="${1:-}"
     local register_url="${2:-}"
+    local auth_token="${3:-}"
+    local manager_ip_override="${4:-}"
 
-    if [ -z "$api_key" ] || [ -z "$register_url" ]; then
-        log_error "Usage: $0 <api_key> <register_url>"
+    if [ -z "$api_key" ] || [ -z "$register_url" ] || [ -z "$manager_ip_override" ]; then
+        log_error "Usage: $0 <api_key> <register_url> <auth_token> <manager_ip>"
         exit 1
     fi
 
@@ -195,17 +204,19 @@ main() {
     fi
 
     # 1. Call agent-register (saves response to REGISTER_OUTPUT)
-    call_register "$api_key" "$register_url"
+    call_register "$api_key" "$register_url" "$auth_token"
 
     # 2. Parse Wazuh config from saved response (read file directly to avoid bash variable issues)
-    local manager_ip manager_port agent_group asset_name
-    manager_ip=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.manager_ip")
+    local manager_port agent_group asset_name
     manager_port=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.manager_port")
     agent_group=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.agent_group")
     asset_name=$(json_get_file "$REGISTER_OUTPUT" ".asset_name")
 
-    if [ -z "$manager_ip" ] || [ -z "$agent_group" ]; then
-        log_error "Missing wazuh config in agent-register response"
+    # Manager IP comes from CLI parameter (mandatory)
+    local manager_ip="$manager_ip_override"
+
+    if [ -z "$agent_group" ]; then
+        log_error "Missing wazuh.agent_group in agent-register response"
         exit 1
     fi
 
@@ -217,6 +228,35 @@ main() {
     # 4. Install Wazuh Agent
     install_wazuh_agent "$manager_ip" "${manager_port:-1514}" "$agent_group" "$asset_name"
 
+    # 5. Extract Wazuh agent ID and save to register JSON for install-aisac-agent.sh
+    local wazuh_agent_id=""
+    if [ -f /var/ossec/etc/client.keys ]; then
+        wazuh_agent_id=$(awk '{print $1; exit}' /var/ossec/etc/client.keys 2>/dev/null || echo "")
+    fi
+
+    # Inject wazuh metadata into the register JSON
+    if command -v jq &>/dev/null; then
+        local tmp_json
+        tmp_json=$(jq \
+            --arg name "$asset_name" \
+            --arg id "$wazuh_agent_id" \
+            '.wazuh.agent_name = $name | .wazuh.agent_id = $id' \
+            "$REGISTER_OUTPUT")
+        echo "$tmp_json" > "$REGISTER_OUTPUT"
+    elif command -v python3 &>/dev/null; then
+        python3 -c "
+import json
+with open('$REGISTER_OUTPUT') as f:
+    data = json.load(f)
+data.setdefault('wazuh', {})['agent_name'] = '$asset_name'
+data.setdefault('wazuh', {})['agent_id'] = '$wazuh_agent_id'
+with open('$REGISTER_OUTPUT', 'w') as f:
+    json.dump(data, f, indent=2)
+"
+    fi
+
+    log_info "  Wazuh Agent Name: ${asset_name}"
+    log_info "  Wazuh Agent ID:   ${wazuh_agent_id:-unknown}"
     log_success "Wazuh Agent installed → Manager: ${manager_ip} | Group: ${agent_group}"
 }
 
