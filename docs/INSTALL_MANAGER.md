@@ -102,7 +102,7 @@ El Auth Token es proporcionado por el administrador de la plataforma. Es un toke
 ### Paso 1: Descargar el script
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install-manager.sh -o install-manager.sh
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install-manager.sh -o install-manager.sh
 ```
 
 ### Paso 2: Ejecutar el instalador

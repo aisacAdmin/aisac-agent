@@ -220,7 +220,7 @@ install_binary() {
             *) log_error "Unsupported arch: $arch"; exit 1 ;;
         esac
 
-        local url="https://github.com/aisacAdmin/aisac-agent/releases/latest/download/aisac-agent-${os}-${arch}"
+        local url="https://github.com/CISECSL/aisac-agent/releases/latest/download/aisac-agent-${os}-${arch}"
         log_info "Downloading from: ${url}"
         curl -fsSL "$url" -o "$INSTALL_DIR/$BINARY_NAME" || {
             log_error "Failed to download binary"
