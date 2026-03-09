@@ -178,6 +178,61 @@ jobs:
             KEY_FILES="$KEY_FILES\n| \`.github/workflows/\` | $WF_COUNT workflow(s) |"
           fi
 
+          # Entry points
+          ENTRY_POINTS=""
+          for ep in "src/main.py" "main.py" "app.py" "cmd/main.go" "main.go" \
+                    "src/main.ts" "src/index.ts" "src/main.tsx" "src/index.tsx" \
+                    "src/pages/Index.tsx" "src/App.tsx" "src/App.ts" \
+                    "server.ts" "server.js" "src/router.ts" "src/routes.ts"; do
+            has_file "$ep" && ENTRY_POINTS="$ENTRY_POINTS\n- \`$ep\`" || true
+          done
+          [ -z "$ENTRY_POINTS" ] && ENTRY_POINTS="\n_No standard entry points detected._"
+
+          # Environment variables from .env.example
+          ENV_VARS=""
+          if has_file ".env.example"; then
+            DEFINED_VARS=$({ grep -E '^[A-Z_][A-Z0-9_]*=' "$REPO_ROOT/.env.example" 2>/dev/null || true; } | sed 's/=.*//')
+            COMMENTED_VARS=$({ grep -E '^#\s*[A-Z_][A-Z0-9_]*=' "$REPO_ROOT/.env.example" 2>/dev/null || true; } | sed 's/^#\s*//;s/=.*//')
+            DEFINED_COUNT=$({ echo "$DEFINED_VARS" | grep -c '[A-Z]' || true; })
+            COMMENTED_COUNT=$({ echo "$COMMENTED_VARS" | grep -c '[A-Z]' || true; })
+            if [ "$DEFINED_COUNT" -gt 0 ] || [ "$COMMENTED_COUNT" -gt 0 ]; then
+              ENV_VARS="\`$DEFINED_COUNT\` active vars in \`.env.example\`\n"
+              # Group vars by prefix, accumulating names per prefix
+              declare -A PREFIX_MAP
+              while IFS= read -r varname; do
+                [ -z "$varname" ] && continue
+                PREFIX=$(echo "$varname" | cut -d'_' -f1)
+                PREFIX_MAP["$PREFIX"]="${PREFIX_MAP[$PREFIX]:-} \`$varname\`"
+              done <<< "$DEFINED_VARS"
+              for pfx in $(echo "${!PREFIX_MAP[@]}" | tr ' ' '\n' | sort); do
+                ENV_VARS="$ENV_VARS\n- **${pfx}_\***:$(echo "${PREFIX_MAP[$pfx]}")"
+              done
+              unset PREFIX_MAP
+              if [ "$COMMENTED_COUNT" -gt 0 ]; then
+                SECRET_LIST=$(echo "$COMMENTED_VARS" | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+                ENV_VARS="$ENV_VARS\n- **Secrets** (set via CI or Supabase vault): \`$SECRET_LIST\`"
+              fi
+            fi
+          fi
+          [ -z "$ENV_VARS" ] && ENV_VARS="\n_No \`.env.example\` found._"
+
+          # Database tables from Supabase migrations
+          DB_TABLES=""
+          if has_dir "supabase/migrations"; then
+            TABLE_NAMES=$({ grep -rh 'CREATE TABLE IF NOT EXISTS' \
+                  "$REPO_ROOT/supabase/migrations/" 2>/dev/null || true; } | \
+                grep -v 'PARTITION OF' | \
+                sed 's/.*CREATE TABLE IF NOT EXISTS "public"\."//;s/.*CREATE TABLE IF NOT EXISTS public\.//;s/[" (].*//' | \
+                grep -E '^[a-z_][a-z0-9_]*$' | \
+                sort -u | head -40 || true)
+            TABLE_COUNT=$({ echo "$TABLE_NAMES" | grep -c '[a-z]' || true; })
+            if [ "$TABLE_COUNT" -gt 0 ]; then
+              TABLE_LIST=$(echo "$TABLE_NAMES" | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+              DB_TABLES="**$TABLE_COUNT tables** from \`supabase/migrations/\`:\n\n\`$TABLE_LIST\`"
+            fi
+          fi
+          [ -z "$DB_TABLES" ] && DB_TABLES="\n_No Supabase migrations found._"
+
           # Architecture patterns
           PATTERNS=""
           TENANT_DIRS=""
@@ -185,7 +240,7 @@ jobs:
           has_dir "lib" && TENANT_DIRS="$TENANT_DIRS $REPO_ROOT/lib"
           if [ -n "$TENANT_DIRS" ]; then
             # shellcheck disable=SC2086
-            TH=$(grep -rl 'tenant_id' $TENANT_DIRS 2>/dev/null | wc -l | tr -d ' ')
+            TH=$({ grep -rl 'tenant_id' $TENANT_DIRS 2>/dev/null || true; } | wc -l | tr -d ' ')
             [ "$TH" -gt 0 ] && PATTERNS="$PATTERNS\n- **Multi-tenant**: \`tenant_id\` in $TH+ files" || true
           fi
           if [ -n "$DEPS" ]; then
@@ -204,7 +259,7 @@ jobs:
             has_dep "$DEPS" "next-auth"                    && PATTERNS="$PATTERNS\n- **Auth**: NextAuth.js"   || true
           fi
           if has_dir "src" && [ -z "$(echo "$PATTERNS" | grep 'Auth')" ]; then
-            AH=$(grep -rl 'supabase\.auth\.' "$REPO_ROOT/src" 2>/dev/null | wc -l | tr -d ' ')
+            AH=$({ grep -rl 'supabase\.auth\.' "$REPO_ROOT/src" 2>/dev/null || true; } | wc -l | tr -d ' ')
             [ "$AH" -gt 0 ] && PATTERNS="$PATTERNS\n- **Auth**: Supabase Auth (via supabase-js)" || true
           fi
 
@@ -218,15 +273,95 @@ jobs:
             [ -n "$NOTABLE" ] && DEP_SUMMARY="$DEP_SUMMARY\n- **Notable**: \n$NOTABLE" || true
           fi
           has_file "requirements.txt" && DEP_SUMMARY="$DEP_SUMMARY\n- **pip**: $(grep -cE '^\s*[a-zA-Z]' "$REPO_ROOT/requirements.txt" 2>/dev/null || echo 0) packages" || true
-          has_file "go.mod"           && DEP_SUMMARY="$DEP_SUMMARY\n- **Go modules**: $(grep -c 'require' "$REPO_ROOT/go.mod" 2>/dev/null || echo 0) deps" || true
+          has_file "go.mod"           && DEP_SUMMARY="$DEP_SUMMARY\n- **Go modules**: $({ grep -c 'require' "$REPO_ROOT/go.mod" 2>/dev/null || echo 0; }) deps" || true
+          if has_file "pyproject.toml" && ! has_file "requirements.txt"; then
+            PY_DEP_COUNT=$(awk '/^\[project\]$/{p=1}/^\[/{if(!/^\[project\]/)p=0}p&&/^dependencies/{d=1}/d&&/\]/{d=0}d&&/^\s*"[a-zA-Z]/{c++}END{print c+0}' "$REPO_ROOT/pyproject.toml" 2>/dev/null || echo 0)
+            NOTABLE_PY=$(awk '/^\[project\]$/{p=1}/^\[/{if(!/^\[project\]/)p=0}p&&/^dependencies/{d=1}/d&&/\]/{d=0}d&&/^\s*"[a-zA-Z]/{pkg=$0;gsub(/^[ \t]*"/,"",pkg);gsub(/["><=,; \t].*/,"",pkg);if(pkg~/^(fastapi|anthropic|supabase|pydantic|uvicorn|openai|langchain|httpx|sqlalchemy|celery|redis|boto3|requests|aiohttp|pytest|django|flask)$/)print "  - "pkg}' "$REPO_ROOT/pyproject.toml" 2>/dev/null || true)
+            [ "$PY_DEP_COUNT" -gt 0 ] && DEP_SUMMARY="$DEP_SUMMARY\n- **pyproject.toml**: $PY_DEP_COUNT dependencies" || true
+            [ -n "$NOTABLE_PY" ] && DEP_SUMMARY="$DEP_SUMMARY\n- **Notable Python packages**:\n$NOTABLE_PY" || true
+          fi
+
+          # Persona — derived from everything detected above
+          PERSONA_TYPE="software project"
+          if has_dep "$DEPS" "react" 2>/dev/null && { has_dep "$DEPS" "@supabase/supabase-js" 2>/dev/null || has_dir "supabase"; }; then
+            PERSONA_TYPE="React SPA with Supabase backend (full-stack)"
+          elif has_dep "$DEPS" "react" 2>/dev/null && has_dep "$DEPS" "next" 2>/dev/null; then
+            PERSONA_TYPE="Next.js full-stack application"
+          elif has_dep "$DEPS" "react" 2>/dev/null; then
+            PERSONA_TYPE="React frontend SPA"
+          elif echo "${FRAMEWORKS[*]:-}" | grep -qi "FastAPI"; then
+            PERSONA_TYPE="Python FastAPI backend service"
+          elif echo "${FRAMEWORKS[*]:-}" | grep -qi "Django"; then
+            PERSONA_TYPE="Python Django application"
+          elif echo "${LANGUAGES[*]:-}" | grep -q "Go"; then
+            PERSONA_TYPE="Go service/agent"
+          elif echo "${LANGUAGES[*]:-}" | grep -q "Python"; then
+            PERSONA_TYPE="Python backend service"
+          fi
+
+          PERSONA_ALWAYS=""
+          PERSONA_NEVER="\n- Never invent file paths, function names, or API endpoints — check the codebase first\n- Never silently swallow errors; always surface them through the project's error handler"
+
+          if has_dep "$ALL_DEPS" "typescript" 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use TypeScript for every new file; never create plain \`.js\` alongside \`.ts\`"
+          fi
+          TS_STRICT=0
+          { has_file "tsconfig.json" && grep -qE '"strict"|noImplicitAny|strictNullChecks' "$REPO_ROOT/tsconfig.json" && TS_STRICT=1; } || true
+          { has_file "tsconfig.app.json" && grep -qE '"strict"|noImplicitAny|strictNullChecks' "$REPO_ROOT/tsconfig.app.json" && TS_STRICT=1; } || true
+          if [ "$TS_STRICT" -gt 0 ]; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Strict TypeScript is enabled: every value must be typed; use \`unknown\` instead of \`any\`"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never use \`any\` — strict TypeScript checks will fail"
+          fi
+          if echo "$PATTERNS" | grep -q 'Multi-tenant' 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Include \`tenant_id\` in every database query and mutation"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never query a table that has \`tenant_id\` without filtering on it"
+          fi
+          if echo "$PATTERNS" | grep -q 'Auth' 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use the project's existing auth hooks/context for all authentication checks"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never hard-code user IDs or bypass auth guards"
+          fi
+          if has_dep "$DEPS" "zod" 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Validate all external/user data with Zod schemas before use"
+          fi
+          if has_dep "$DEPS" "@tanstack/react-query" 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use TanStack Query (\`useQuery\`/\`useMutation\`) for server state; never store fetched data in \`useState\`"
+          fi
+          if has_dep "$DEPS" "zustand" 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use Zustand stores (in \`src/stores/\`) for client-side global state"
+          fi
+          if has_dep "$DEPS" "@supabase/supabase-js" 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Call Edge Functions via \`supabase.functions.invoke()\` and check both \`error\` and \`data.success\`"
+          fi
+          if has_dep "$ALL_DEPS" "react-hook-form" 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use \`react-hook-form\` with \`zodResolver\` for all form validation"
+          fi
+          if has_dep "$ALL_DEPS" "i18next" 2>/dev/null || has_dep "$DEPS" "react-i18next" 2>/dev/null; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Wrap all user-visible strings in \`t('key')\`; never hard-code UI text"
+          fi
+          if echo "${FRAMEWORKS[*]:-}" | grep -qi "FastAPI"; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use async/await for all route handlers; define request/response shapes with Pydantic models"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never write synchronous FastAPI route handlers"
+          fi
+          if echo "${LANGUAGES[*]:-}" | grep -q "Go"; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Handle every \`error\` return value explicitly"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never use blank identifier \`_\` to discard Go errors"
+          fi
+          if has_dir "supabase/functions"; then
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Edge Functions use Deno runtime — use \`Deno.serve()\` and import from \`jsr:\` or \`npm:\`"
+          fi
+          [ -z "$PERSONA_ALWAYS" ] && PERSONA_ALWAYS="\n- Follow existing code patterns and conventions in this repository"
+
+          PERSONA="You are an expert developer working on **$REPO_NAME** — a $PERSONA_TYPE.\n\n$OVERVIEW\n\n### Always\n$PERSONA_ALWAYS\n\n### Never\n$PERSONA_NEVER"
 
           # Write output
           mkdir -p "$OUTPUT_DIR"
-          printf "<!-- AUTO-GENERATED by CISECSL/org-tools -->\n<!-- Last generated: %s -->\n\n# %s\n\n## Overview\n\n%s\n\n## Tech Stack\n\n| Category | Technologies |\n|---|---|\n| Language | %s |\n| Framework | %s |\n| Build Tool | %s |\n| Database | %s |\n| Infrastructure | %s |\n\n## Commands\n\n%b\n\n## Directory Structure\n\n\`\`\`\n%s/%b\n\`\`\`\n\n## Key Files\n\n| File | Description |\n|---|---|\n%b\n\n## Architecture Patterns\n\n%b\n\n## Dependencies\n\n%b\n\n---\n\n*Generated by [CISECSL/org-tools](https://github.com/CISECSL/org-tools) v1.0*\n*Last updated: %s*\n" \
-            "$TIMESTAMP" "$REPO_NAME" "$OVERVIEW" \
+          printf "<!-- AUTO-GENERATED by CISECSL/org-tools -->\n<!-- Last generated: %s -->\n\n# %s\n\n## Claude Persona\n\n%b\n\n## Overview\n\n%s\n\n## Tech Stack\n\n| Category | Technologies |\n|---|---|\n| Language | %s |\n| Framework | %s |\n| Build Tool | %s |\n| Database | %s |\n| Infrastructure | %s |\n\n## Commands\n\n%b\n\n## Directory Structure\n\n\`\`\`\n%s/%b\n\`\`\`\n\n## Key Files\n\n| File | Description |\n|---|---|\n%b\n\n## Entry Points\n\n%b\n\n## Environment Variables\n\n%b\n\n## Database Tables\n\n%b\n\n## Architecture Patterns\n\n%b\n\n## Dependencies\n\n%b\n\n---\n\n*Generated by [CISECSL/org-tools](https://github.com/CISECSL/org-tools) v1.0*\n*Last updated: %s*\n" \
+            "$TIMESTAMP" "$REPO_NAME" "$PERSONA" \
+            "$OVERVIEW" \
             "$LANG_STR" "$FRMK_STR" "$BILD_STR" "$DB_STR" "$INFRA_STR" \
             "$COMMANDS" "$REPO_NAME" "$DIR_TREE" \
-            "$KEY_FILES" "$PATTERNS" "$DEP_SUMMARY" "$TIMESTAMP" \
+            "$KEY_FILES" "$ENTRY_POINTS" "$ENV_VARS" "$DB_TABLES" \
+            "$PATTERNS" "$DEP_SUMMARY" "$TIMESTAMP" \
             > "$OUTPUT_FILE"
 
           echo "✓ Generated $OUTPUT_FILE ($(wc -l < "$OUTPUT_FILE" | tr -d ' ') lines)"
@@ -327,7 +462,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude/context.md
+          git add -f .claude/context.md
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
