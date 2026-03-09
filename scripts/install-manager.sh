@@ -87,6 +87,7 @@ usage() {
     echo "  --no-indexer       Install only Wazuh Manager (no Indexer/Dashboard, ~500MB RAM)"
     echo "  --agent            Enable full asset capabilities (actions, safety, syslog)"
     echo "  --soar             Enable SOAR mode (mTLS + command server). Implies --agent"
+    echo "  --uninstall        Uninstall everything (Wazuh Manager, AISAC Agent, data)"
     echo "  -h                 Show this help"
     echo ""
     echo "Examples:"
@@ -98,6 +99,111 @@ usage() {
     echo ""
     echo "  # Full asset with SOAR orchestration"
     echo "  sudo bash $0 -k aisac_xxxx -t eyJhbG... --soar"
+    echo ""
+    echo "  # Uninstall everything"
+    echo "  sudo bash $0 --uninstall"
+}
+
+#==============================================================================
+# Uninstall
+#==============================================================================
+
+prompt_yes_no() {
+    local message="$1"
+    local default="${2:-n}"
+    local result
+
+    if [ "$default" = "y" ]; then
+        echo -en "${CYAN}$message${NC} [Y/n]: " >/dev/tty
+    else
+        echo -en "${CYAN}$message${NC} [y/N]: " >/dev/tty
+    fi
+    read result </dev/tty
+
+    result="${result:-$default}"
+    case "$result" in
+        [Yy]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+uninstall() {
+    echo ""
+    log_warning "This will remove Wazuh Manager, AISAC Agent, Command Server, and all related data"
+
+    if ! prompt_yes_no "Are you sure you want to uninstall?" "n"; then
+        echo "Uninstall cancelled"
+        exit 0
+    fi
+
+    # ── Stop and remove AISAC services ──
+    log_info "Stopping AISAC services..."
+    for svc in aisac-agent aisac-server; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl stop "$svc" 2>/dev/null || true
+        fi
+        systemctl disable "$svc" 2>/dev/null || true
+        rm -f "/etc/systemd/system/${svc}.service"
+    done
+
+    # Kill lingering processes
+    pkill -x "aisac-agent" 2>/dev/null || true
+    pkill -x "aisac-server" 2>/dev/null || true
+    sleep 1
+
+    # Remove AISAC binaries
+    log_info "Removing AISAC binaries..."
+    rm -f /usr/local/bin/aisac-agent
+    rm -f /usr/local/bin/aisac-server
+    rm -rf "$INSTALL_DIR"
+    log_success "AISAC binaries removed"
+
+    # ── Stop and remove Wazuh Manager ──
+    log_info "Stopping Wazuh Manager..."
+    systemctl stop wazuh-manager 2>/dev/null || true
+    systemctl stop filebeat 2>/dev/null || true
+    systemctl stop wazuh-indexer 2>/dev/null || true
+    systemctl stop wazuh-dashboard 2>/dev/null || true
+
+    # Remove Wazuh packages
+    if command -v dpkg &>/dev/null; then
+        log_info "Removing Wazuh packages (deb)..."
+        for pkg in wazuh-manager wazuh-indexer wazuh-dashboard filebeat; do
+            dpkg --purge "$pkg" 2>/dev/null || true
+        done
+    elif command -v rpm &>/dev/null; then
+        log_info "Removing Wazuh packages (rpm)..."
+        for pkg in wazuh-manager wazuh-indexer wazuh-dashboard filebeat; do
+            rpm -e "$pkg" 2>/dev/null || true
+        done
+    fi
+    log_success "Wazuh packages removed"
+
+    # ── Remove data ──
+    if prompt_yes_no "Remove ALL data (config, certs, logs, Wazuh data)?" "n"; then
+        log_info "Removing AISAC data..."
+        rm -rf "$CONFIG_DIR"
+        rm -rf "$DATA_DIR"
+        rm -rf "$LOG_DIR"
+
+        log_info "Removing Wazuh data..."
+        rm -rf /var/ossec
+        rm -rf /etc/filebeat
+        rm -rf /etc/wazuh-indexer
+        rm -rf /etc/wazuh-dashboard
+        rm -rf /tmp/wazuh-install-files.tar
+        rm -f /tmp/wazuh-install.sh /tmp/config.yml
+
+        log_success "All data removed"
+    else
+        log_info "Data preserved in $CONFIG_DIR, /var/ossec, etc."
+    fi
+
+    systemctl daemon-reload
+
+    echo ""
+    log_success "Uninstall complete. All AISAC and Wazuh components removed."
+    echo ""
 }
 
 # ─── JSON helper ───
@@ -962,6 +1068,7 @@ registration:
   enabled: true
   url: "$(echo "$HEARTBEAT_URL" | sed -E 's|/functions/v1/.*||')/functions/v1/agent-webhook"
   api_key: "${API_KEY}"
+  auth_token: "${AUTH_TOKEN}"
   asset_id: "${ASSET_ID}"
   command_server_url: "${PUBLIC_SERVER_URL:-}"
   command_server_token: "${SERVER_API_TOKEN:-}"
@@ -1134,6 +1241,14 @@ main() {
             --no-indexer) NO_INDEXER=true; shift ;;
             --agent) AGENT_MODE=true; shift ;;
             --soar) SOAR_ENABLED=true; AGENT_MODE=true; shift ;;
+            --uninstall)
+                if [ "$EUID" -ne 0 ]; then
+                    log_error "Must be run as root"
+                    exit 1
+                fi
+                uninstall
+                exit 0
+                ;;
             -h|--help) usage; exit 0 ;;
             *) log_error "Unknown argument: $1"; usage; exit 1 ;;
         esac
