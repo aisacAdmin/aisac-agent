@@ -170,7 +170,7 @@ function Install-Binary {
     }
 
     # Option 2: Download from GitHub Releases
-    $downloadUrl = "https://github.com/aisacAdmin/aisac-agent/releases/latest/download/aisac-agent-windows-amd64.exe"
+    $downloadUrl = "https://github.com/CISECSL/aisac-agent/releases/latest/download/aisac-agent-windows-amd64.exe"
     Write-Info "Downloading from: $downloadUrl"
     try {
         Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath -UseBasicParsing

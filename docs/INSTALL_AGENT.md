@@ -120,9 +120,9 @@ Token JWT proporcionado por el administrador de la plataforma. Necesario para au
 ### Paso 1: Descargar los scripts
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install.sh -o install.sh
-curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install-wazuh-agent.sh -o install-wazuh-agent.sh
-curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install-aisac-agent.sh -o install-aisac-agent.sh
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install.sh -o install.sh
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install-wazuh-agent.sh -o install-wazuh-agent.sh
+curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install-aisac-agent.sh -o install-aisac-agent.sh
 chmod +x install.sh install-wazuh-agent.sh install-aisac-agent.sh
 ```
 
@@ -211,7 +211,7 @@ New-Item -ItemType Directory -Path "$env:TEMP\aisac-install" -Force
 cd "$env:TEMP\aisac-install"
 
 # Descargar scripts
-$baseUrl = "https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts"
+$baseUrl = "https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts"
 @("install.ps1", "install-wazuh-agent.ps1", "install-aisac-agent.ps1") | ForEach-Object {
     Invoke-WebRequest -Uri "$baseUrl/$_" -OutFile $_ -UseBasicParsing
 }

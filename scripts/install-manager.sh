@@ -23,7 +23,7 @@
 #   sudo bash install-manager.sh -k <API_KEY> -t <AUTH_TOKEN> --agent --soar
 #
 # One-liner:
-#   curl -sSL https://raw.githubusercontent.com/aisacAdmin/aisac-agent/main/scripts/install-manager.sh -o install-manager.sh
+#   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install-manager.sh -o install-manager.sh
 #   sudo bash install-manager.sh -k <API_KEY> -t <AUTH_TOKEN>
 #
 
@@ -530,7 +530,7 @@ install_aisac_binary() {
             *) log_error "Unsupported arch: $arch"; exit 1 ;;
         esac
 
-        local url="https://github.com/aisacAdmin/aisac-agent/releases/latest/download/aisac-agent-linux-${arch}"
+        local url="https://github.com/CISECSL/aisac-agent/releases/latest/download/aisac-agent-linux-${arch}"
         log_info "Downloading from: ${url}"
         curl -fsSL "$url" -o "$INSTALL_DIR/$BINARY_NAME" || {
             log_error "Failed to download binary"
