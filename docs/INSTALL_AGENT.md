@@ -236,15 +236,36 @@ Abrir PowerShell **como Administrador**:
 
 ### Parametros
 
-| Parametro | Obligatorio | Descripcion |
-|-----------|-------------|-------------|
-| `-ApiKey` | Si | API Key del asset en la plataforma AISAC |
-| `-AuthToken` | Si | Token JWT para autenticacion con el gateway |
-| `-ManagerIp` | Si | IP del Wazuh Manager |
-| `-ConfigUrl` | No | URL del endpoint install-config (por defecto: produccion) |
-| `-Soar` | No | Habilitar modo SOAR (Command Server + certificados mTLS) |
-| `-Uninstall` | No | Desinstalar AISAC Agent, Command Server y Wazuh Agent |
-| `-Help` | No | Mostrar ayuda |
+| Parametro | Obligatorio | Equivalente Linux | Descripcion |
+|-----------|-------------|-------------------|-------------|
+| `-ApiKey` | Si | `-k` | API Key del asset en la plataforma AISAC |
+| `-AuthToken` | Si | `-t` | Token JWT para autenticacion con el gateway |
+| `-ManagerIp` | Si | `-m` | IP del Wazuh Manager |
+| `-ConfigUrl` | No | `-u` | URL del endpoint install-config (por defecto: produccion) |
+| `-Soar` | No | `--soar` | Habilitar modo SOAR (Command Server + certificados mTLS) |
+| `-Uninstall` | No | `--uninstall` | Desinstalar AISAC Agent, Command Server y Wazuh Agent |
+| `-Help` | No | `-h` | Mostrar ayuda |
+
+> Los parametros de Windows son identicos en funcionalidad a los de Linux, solo cambia la nomenclatura (PowerShell named params vs POSIX flags).
+
+### Que hace el instalador
+
+```
+  Step 1/2: Instalar Wazuh Agent
+    - Llama al endpoint install-config con la API Key para obtener la configuracion
+    - Descarga e instala el MSI de Wazuh Agent
+    - Configura la conexion al Manager (IP, puerto, grupo, nombre)
+    - Extrae el Wazuh Agent ID de client.keys e inyecta metadatos en el registro
+    - Inicia el servicio WazuhSvc
+
+  Step 2/2: Instalar AISAC Agent
+    - Instala el binario aisac-agent.exe via NSSM (wrapper de servicios)
+    - Genera la configuracion (heartbeat + collector)
+    - Auto-detecta fuentes de logs locales (Suricata, Wazuh alerts)
+    - Instala e inicia el servicio AISACAgent
+    - Registra el agente en la plataforma con metadatos Wazuh (agent_name, agent_id)
+    - Si -Soar: genera certificados mTLS (requiere OpenSSL en PATH), instala Command Server
+```
 
 ### Estructura de directorios
 
@@ -256,8 +277,12 @@ C:\Program Files\AISAC\
 
 C:\ProgramData\AISAC\
   agent.yaml                     # Configuracion
+  server-api-token               # Token del Command Server (solo con -Soar)
   certs\                         # Certificados mTLS (solo con -Soar)
-  data\                          # Datos persistentes
+  data\
+    agent-id                     # ID persistente del agente
+    sincedb.json                 # Posicion de lectura de logs
+    safety_state.json            # Estado interno
   logs\
     agent.log                    # Logs del agente
     service-stdout.log           # Salida del servicio
@@ -283,6 +308,8 @@ sudo ./install.sh -k <API_KEY> -t <AUTH_TOKEN> -m <MANAGER_IP> --soar
 ```powershell
 .\install.ps1 -ApiKey <API_KEY> -AuthToken <AUTH_TOKEN> -ManagerIp <MANAGER_IP> -Soar
 ```
+
+> **Requisito Windows**: El modo SOAR en Windows requiere **OpenSSL** instalado y disponible en PATH para generar los certificados mTLS.
 
 ### Que se instala adicionalmente
 
@@ -409,9 +436,13 @@ El instalador busca automaticamente las siguientes fuentes y habilita el collect
 |--------|--------|-------------|----------------|
 | Suricata EVE | `suricata_eve` | `/var/log/suricata/eve.json` | `C:\Program Files\Suricata\log\eve.json` |
 | Wazuh Alerts | `wazuh_alerts` | `/var/ossec/logs/alerts/alerts.json` | `C:\Program Files (x86)\ossec-agent\logs\alerts\alerts.json` |
-| Syslog | `syslog` | `/var/log/syslog` o `/var/log/messages` | — |
+| Syslog | `syslog` | `/var/log/syslog` o `/var/log/messages` | — (no aplica en Windows) |
 
 > Si no se detecta ninguna fuente, el collector queda deshabilitado. Se puede habilitar manualmente editando `agent.yaml`.
+
+### Metadatos Wazuh
+
+Durante la instalacion, el script de Wazuh (`install-wazuh-agent.sh` / `install-wazuh-agent.ps1`) extrae el **Wazuh Agent ID** y el **nombre del agente** y los inyecta en el fichero de registro temporal. El script de AISAC (`install-aisac-agent.sh` / `install-aisac-agent.ps1`) los lee y envia como `integration_config` al registrar el agente en la plataforma. Esto permite que la plataforma asocie las alertas de Wazuh (que llegan via el Manager) con el asset correcto.
 
 
 ---
@@ -620,3 +651,20 @@ Get-Content "C:\ProgramData\AISAC\logs\service-stderr.log" -Tail 50
 2. Buscar errores de heartbeat en los logs
 3. Verificar conectividad HTTPS: `curl -v https://api.aisac.cisec.es`
 4. Comprobar que el `asset_id` en la configuracion coincide con el de la plataforma
+
+### Windows: El servicio no arranca tras reiniciar
+
+Los servicios AISAC en Windows usan NSSM como wrapper. Si el servicio no arranca:
+
+```powershell
+# Ver estado detallado
+& "C:\Program Files\AISAC\nssm.exe" status AISACAgent
+
+# Ver logs de error del wrapper
+Get-Content "C:\ProgramData\AISAC\logs\service-stderr.log" -Tail 30
+
+# Reinstalar el servicio manualmente si se corrompio
+& "C:\Program Files\AISAC\nssm.exe" remove AISACAgent confirm
+& "C:\Program Files\AISAC\nssm.exe" install AISACAgent "C:\Program Files\AISAC\aisac-agent.exe" "-c `"C:\ProgramData\AISAC\agent.yaml`""
+Start-Service AISACAgent
+```

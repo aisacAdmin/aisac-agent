@@ -61,10 +61,34 @@ function Get-RegisterConfig {
     $script:HeartbeatUrl = $data.aisac.heartbeat_url
     $script:IngestUrl    = $data.aisac.ingest_url
     $script:TenantId     = $data.tenant_id
+    $script:WazuhAgentName = if ($data.wazuh -and $data.wazuh.PSObject.Properties["agent_name"]) { $data.wazuh.agent_name } else { "" }
+    $script:WazuhAgentId   = if ($data.wazuh -and $data.wazuh.PSObject.Properties["agent_id"]) { $data.wazuh.agent_id } else { "" }
 
     if (-not $script:ApiKey -or -not $script:AssetId) {
         Write-Fail "Missing api_key or asset_id in $RegisterOutput"
         exit 1
+    }
+
+    # ── Validate and fix URLs ──
+    # The install-config edge function sometimes returns incorrect endpoints.
+    # Ensure heartbeat -> agent-heartbeat and ingest -> syslog-ingest.
+
+    if ($script:HeartbeatUrl -and $script:HeartbeatUrl -notmatch "agent-heartbeat") {
+        $baseUrl = $script:HeartbeatUrl -replace '/functions/v1/.*', '/functions/v1'
+        $script:HeartbeatUrl = "$baseUrl/agent-heartbeat"
+        Write-Warn "Corrected heartbeat URL to: $($script:HeartbeatUrl)"
+    }
+
+    if ($script:IngestUrl -and $script:IngestUrl -notmatch "syslog-ingest") {
+        $baseUrl = $script:IngestUrl -replace '/functions/v1/.*', '/functions/v1'
+        $script:IngestUrl = "$baseUrl/syslog-ingest"
+        Write-Warn "Corrected ingest URL to: $($script:IngestUrl)"
+    }
+
+    if (-not $script:IngestUrl) {
+        $baseUrl = $script:HeartbeatUrl -replace '/functions/v1/.*', '/functions/v1'
+        $script:IngestUrl = "$baseUrl/syslog-ingest"
+        Write-Warn "Ingest URL was empty, derived: $($script:IngestUrl)"
     }
 
     Write-Ok "Config loaded from $RegisterOutput"
@@ -403,7 +427,8 @@ function Register-Agent {
         [string]$AssetIdVal,
         [string]$RegisterUrl,
         [string]$CsToken = "",
-        [string]$CsUrl = ""
+        [string]$CsUrl = "",
+        [string]$AuthTokenVal = ""
     )
 
     Write-Info "Registering agent with AISAC platform..."
@@ -437,10 +462,21 @@ function Register-Agent {
         $body["command_server_url"] = $CsUrl
     }
 
+    # Add Wazuh agent mapping (matches Linux behavior)
+    if ($script:WazuhAgentName) {
+        $body["integration_config"] = @{
+            wazuh_agent_name = $script:WazuhAgentName
+            wazuh_agent_id = if ($script:WazuhAgentId) { $script:WazuhAgentId } else { "" }
+        }
+    }
+
     try {
         $headers = @{
             "Content-Type" = "application/json"
             "X-API-Key" = $ApiKeyVal
+        }
+        if ($AuthTokenVal) {
+            $headers["Authorization"] = "Bearer $AuthTokenVal"
         }
         $jsonBody = $body | ConvertTo-Json -Depth 5
         $response = Invoke-RestMethod -Uri $RegisterUrl -Method POST -Headers $headers -Body $jsonBody
@@ -857,10 +893,11 @@ if ($script:HeartbeatUrl) {
 if ($registerUrl) {
     if ($script:ServerApiToken -and $script:PublicServerUrl) {
         Register-Agent -AgentId $script:AgentId -ApiKeyVal $script:ApiKey -AssetIdVal $script:AssetId `
-            -RegisterUrl $registerUrl -CsToken $script:ServerApiToken -CsUrl $script:PublicServerUrl
+            -RegisterUrl $registerUrl -CsToken $script:ServerApiToken -CsUrl $script:PublicServerUrl `
+            -AuthTokenVal $script:AuthToken
     } else {
         Register-Agent -AgentId $script:AgentId -ApiKeyVal $script:ApiKey -AssetIdVal $script:AssetId `
-            -RegisterUrl $registerUrl
+            -RegisterUrl $registerUrl -AuthTokenVal $script:AuthToken
     }
 }
 

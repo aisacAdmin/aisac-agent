@@ -94,6 +94,31 @@ load_register_config() {
         exit 1
     fi
 
+    # ── Validate and fix URLs ──
+    # The install-config edge function sometimes returns incorrect endpoints.
+    # Ensure heartbeat → agent-heartbeat and ingest → syslog-ingest.
+
+    if [ -n "$HEARTBEAT_URL" ] && ! echo "$HEARTBEAT_URL" | grep -q "agent-heartbeat"; then
+        local base_url
+        base_url=$(echo "$HEARTBEAT_URL" | sed -E 's|/functions/v1/.*|/functions/v1|')
+        HEARTBEAT_URL="${base_url}/agent-heartbeat"
+        log_warning "Corrected heartbeat URL to: ${HEARTBEAT_URL}"
+    fi
+
+    if [ -n "$INGEST_URL" ] && ! echo "$INGEST_URL" | grep -q "syslog-ingest"; then
+        local base_url
+        base_url=$(echo "$INGEST_URL" | sed -E 's|/functions/v1/.*|/functions/v1|')
+        INGEST_URL="${base_url}/syslog-ingest"
+        log_warning "Corrected ingest URL to: ${INGEST_URL}"
+    fi
+
+    if [ -z "$INGEST_URL" ]; then
+        local base_url
+        base_url=$(echo "$HEARTBEAT_URL" | sed -E 's|/functions/v1/.*|/functions/v1|')
+        INGEST_URL="${base_url}/syslog-ingest"
+        log_warning "Ingest URL was empty, derived: ${INGEST_URL}"
+    fi
+
     log_success "Config loaded from ${REGISTER_OUTPUT}"
     log_info "  Asset ID:      ${ASSET_ID}"
     log_info "  Tenant ID:     ${TENANT_ID}"
@@ -740,6 +765,7 @@ registration:
   enabled: true
   url: "$(echo "$HEARTBEAT_URL" | sed -E 's|/functions/v1/.*||')/functions/v1/agent-webhook"
   api_key: "${API_KEY}"
+  auth_token: "${AUTH_TOKEN}"
   asset_id: "${ASSET_ID}"
   command_server_url: "${PUBLIC_SERVER_URL:-}"
   command_server_token: "${SERVER_API_TOKEN:-}"

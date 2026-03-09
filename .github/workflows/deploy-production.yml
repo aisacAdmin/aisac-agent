@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version: "1.26"
           cache: true
 
       - name: Determine version
@@ -236,7 +236,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version: "1.26"
           cache: true
 
       - name: Run GoReleaser

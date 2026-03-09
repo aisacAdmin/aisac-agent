@@ -143,4 +143,27 @@ Write-Info "Asset name: $assetName"
 Install-WazuhAgent -ManagerIp $managerIp -ManagerPort $managerPort `
     -AgentGroup $agentGroup -AgentName $assetName
 
+# 4. Extract Wazuh agent ID and inject metadata into register JSON
+$wazuhAgentId = ""
+$clientKeysPath = "C:\Program Files (x86)\ossec-agent\client.keys"
+if (Test-Path $clientKeysPath) {
+    $firstLine = Get-Content $clientKeysPath -TotalCount 1
+    if ($firstLine) {
+        $firstLine = $firstLine.Trim()
+        $wazuhAgentId = ($firstLine -split '\s+')[0]
+    }
+}
+
+# Inject wazuh.agent_name and wazuh.agent_id into register JSON (matches Linux behavior)
+$regData = Get-Content $RegisterOutput -Raw | ConvertFrom-Json
+if (-not $regData.wazuh) { $regData | Add-Member -NotePropertyName "wazuh" -NotePropertyValue ([PSCustomObject]@{}) -Force }
+$regData.wazuh | Add-Member -NotePropertyName "agent_name" -NotePropertyValue $assetName -Force
+$regData.wazuh | Add-Member -NotePropertyName "agent_id" -NotePropertyValue $wazuhAgentId -Force
+$regData | ConvertTo-Json -Depth 10 | Set-Content -Path $RegisterOutput -Encoding UTF8
+
+Write-Info "  Wazuh Agent Name: $assetName"
+Write-Info "  Wazuh Agent ID:   $(if ($wazuhAgentId) { $wazuhAgentId } else { 'unknown' })"
 Write-Ok "Wazuh Agent installed -> Manager: $managerIp | Group: $agentGroup"
+
+# Reset LASTEXITCODE so the caller doesn't see a stale non-zero from msiexec or other native commands
+$global:LASTEXITCODE = 0

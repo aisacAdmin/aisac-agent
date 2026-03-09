@@ -31,6 +31,7 @@ type RegistrationSettings struct {
 	Enabled            bool   `yaml:"enabled"`
 	URL                string `yaml:"url"`
 	APIKey             string `yaml:"api_key"`
+	AuthToken          string `yaml:"auth_token"`
 	AssetID            string `yaml:"asset_id"`
 	CommandServerURL   string `yaml:"command_server_url"`
 	CommandServerToken string `yaml:"command_server_token"`
