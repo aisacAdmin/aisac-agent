@@ -352,6 +352,15 @@ func (a *Agent) registerWithPlatform() {
 	req.Header.Set("X-API-Key", apiKey)
 	req.Header.Set("User-Agent", "AISAC-Agent/"+Version)
 
+	// Add Authorization header for Supabase gateway
+	authToken := reg.AuthToken
+	if authToken == "" {
+		authToken = a.cfg.Heartbeat.AuthToken
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

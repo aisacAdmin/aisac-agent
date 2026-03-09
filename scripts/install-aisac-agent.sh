@@ -765,6 +765,7 @@ registration:
   enabled: true
   url: "$(echo "$HEARTBEAT_URL" | sed -E 's|/functions/v1/.*||')/functions/v1/agent-webhook"
   api_key: "${API_KEY}"
+  auth_token: "${AUTH_TOKEN}"
   asset_id: "${ASSET_ID}"
   command_server_url: "${PUBLIC_SERVER_URL:-}"
   command_server_token: "${SERVER_API_TOKEN:-}"

@@ -69,6 +69,28 @@ function Get-RegisterConfig {
         exit 1
     }
 
+    # ── Validate and fix URLs ──
+    # The install-config edge function sometimes returns incorrect endpoints.
+    # Ensure heartbeat -> agent-heartbeat and ingest -> syslog-ingest.
+
+    if ($script:HeartbeatUrl -and $script:HeartbeatUrl -notmatch "agent-heartbeat") {
+        $baseUrl = $script:HeartbeatUrl -replace '/functions/v1/.*', '/functions/v1'
+        $script:HeartbeatUrl = "$baseUrl/agent-heartbeat"
+        Write-Warn "Corrected heartbeat URL to: $($script:HeartbeatUrl)"
+    }
+
+    if ($script:IngestUrl -and $script:IngestUrl -notmatch "syslog-ingest") {
+        $baseUrl = $script:IngestUrl -replace '/functions/v1/.*', '/functions/v1'
+        $script:IngestUrl = "$baseUrl/syslog-ingest"
+        Write-Warn "Corrected ingest URL to: $($script:IngestUrl)"
+    }
+
+    if (-not $script:IngestUrl) {
+        $baseUrl = $script:HeartbeatUrl -replace '/functions/v1/.*', '/functions/v1'
+        $script:IngestUrl = "$baseUrl/syslog-ingest"
+        Write-Warn "Ingest URL was empty, derived: $($script:IngestUrl)"
+    }
+
     Write-Ok "Config loaded from $RegisterOutput"
     Write-Info "  Asset ID:      $($script:AssetId)"
     Write-Info "  Tenant ID:     $($script:TenantId)"
