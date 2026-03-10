@@ -490,13 +490,24 @@ jobs:
           # Base ignore patterns — always excluded
           IGNORE="node_modules/**,dist/**,build/**,.next/**,coverage/**,target/**,vendor/**"
           IGNORE="$IGNORE,*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml"
-          IGNORE="$IGNORE,*.min.js,*.min.css,*.map,*.snap"
+          IGNORE="$IGNORE,*.min.js,*.min.css,*.map,*.snap,*.png,*.jpg,*.jpeg,*.gif,*.svg,*.ico,*.woff,*.woff2,*.ttf,*.eot"
+          # Generated & auto-maintained files
+          IGNORE="$IGNORE,**/*.d.ts,**/__generated__/**,.claude/**"
+          # Test artefacts & coverage
+          IGNORE="$IGNORE,coverage/**,e2e/**,**/*.test.ts,**/*.test.tsx,**/*.spec.ts,**/*.spec.tsx"
+          # Docs, deployment configs, static assets
+          IGNORE="$IGNORE,docs/**,public/**,deployment/**,landing-pages/**"
+          # N8N node packages
+          IGNORE="$IGNORE,n8n-nodes/**"
 
-          # If no repo-level repomix.config.json, add common generated-file exclusions
+          # If no repo-level repomix.config.json, add project-type exclusions
           if [ ! -f repomix.config.json ]; then
+            # Supabase: skip shadcn/ui (auto-generated), huge type file, raw SQL migrations
             IGNORE="$IGNORE,src/components/ui/**"
             IGNORE="$IGNORE,src/integrations/supabase/types.ts"
-            IGNORE="$IGNORE,**/*.d.ts,**/__generated__/**"
+            IGNORE="$IGNORE,supabase/migrations/**"
+            # i18n locale files (large JSON, not code)
+            IGNORE="$IGNORE,src/i18n/**"
           fi
 
           npx --yes repomix \
