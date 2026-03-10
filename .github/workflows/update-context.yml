@@ -7,7 +7,12 @@ on:
     branches: [main, dev]
     paths-ignore:
       - '.claude/context.md'
+      - '.claude/repomix.xml'
   workflow_dispatch:
+
+concurrency:
+  group: update-context-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   update-context:
@@ -281,10 +286,10 @@ jobs:
             [ -n "$NOTABLE_PY" ] && DEP_SUMMARY="$DEP_SUMMARY\n- **Notable Python packages**:\n$NOTABLE_PY" || true
           fi
 
-          # Persona — derived from everything detected above
+          # ── Persona ────────────────────────────────────────────────────────────
           PERSONA_TYPE="software project"
           if has_dep "$DEPS" "react" 2>/dev/null && { has_dep "$DEPS" "@supabase/supabase-js" 2>/dev/null || has_dir "supabase"; }; then
-            PERSONA_TYPE="React SPA with Supabase backend (full-stack)"
+            PERSONA_TYPE="React SPA with Supabase backend"
           elif has_dep "$DEPS" "react" 2>/dev/null && has_dep "$DEPS" "next" 2>/dev/null; then
             PERSONA_TYPE="Next.js full-stack application"
           elif has_dep "$DEPS" "react" 2>/dev/null; then
@@ -299,64 +304,178 @@ jobs:
             PERSONA_TYPE="Python backend service"
           fi
 
+          # Architecture context — auto-detected special patterns
+          PERSONA_ARCH=""
+          if { grep -rl 'navigate-to-section\|VALID_SECTIONS' "$REPO_ROOT/src" 2>/dev/null || true; } | grep -q .; then
+            PERSONA_ARCH="$PERSONA_ARCH\n- **Navigation:** Section-based (NOT URL routing) — navigate with \`window.dispatchEvent(new CustomEvent('navigate-to-section', { detail: { section: 'name' } }))\`; sections stay mounted (\`display:none\` when inactive)"
+          fi
+          if { ls "$REPO_ROOT/src/hooks" 2>/dev/null | grep -q 'useUserRole'; }; then
+            PERSONA_ARCH="$PERSONA_ARCH\n- **Roles:** \`user\` → LiteDashboard only | \`admin\`/\`superadmin\` → full SPA | \`platform_owner\` → + platform management"
+          fi
+          if has_file "src/utils/featureGates.ts"; then
+            PERSONA_ARCH="$PERSONA_ARCH\n- **Feature gating:** Subscription-plan based (\`trial|starter|professional|enterprise\`) via \`useFeatureGate('key')\` or \`checkFeatureAccess(key, plan)\` from \`src/utils/featureGates.ts\`"
+          fi
+          if has_file "src/utils/errorHandler.ts"; then
+            PERSONA_ARCH="$PERSONA_ARCH\n- **Error handling:** Use \`handleError(error, { context, showToast })\` and \`handleSuccess(msg)\` from \`src/utils/errorHandler.ts\`"
+          fi
+          FUNC_COUNT=$(ls "$REPO_ROOT/supabase/functions" 2>/dev/null | grep -v '\.sh$' | wc -l | tr -d ' ')
+          [ "${FUNC_COUNT:-0}" -gt 5 ] && PERSONA_ARCH="$PERSONA_ARCH\n- **Edge Functions:** $FUNC_COUNT functions in \`supabase/functions/\` (Deno runtime, called via \`supabase.functions.invoke()\`)"
+          if has_file "go.mod"; then
+            MOD_NAME=$(grep '^module ' "$REPO_ROOT/go.mod" 2>/dev/null | awk '{print $2}' || true)
+            [ -n "$MOD_NAME" ] && PERSONA_ARCH="$PERSONA_ARCH\n- **Go module:** \`$MOD_NAME\`"
+          fi
+
+          # Coding rules
           PERSONA_ALWAYS=""
-          PERSONA_NEVER="\n- Never invent file paths, function names, or API endpoints — check the codebase first\n- Never silently swallow errors; always surface them through the project's error handler"
+          PERSONA_NEVER="\n- Never invent file paths, function names, hook names, or table names — always verify in the codebase first\n- Never silently swallow errors — surface them via the project's error handler"
 
           if has_dep "$ALL_DEPS" "typescript" 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use TypeScript for every new file; never create plain \`.js\` alongside \`.ts\`"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use TypeScript for every new file; never add plain \`.js\` alongside \`.ts\`"
           fi
           TS_STRICT=0
           { has_file "tsconfig.json" && grep -qE '"strict"|noImplicitAny|strictNullChecks' "$REPO_ROOT/tsconfig.json" && TS_STRICT=1; } || true
           { has_file "tsconfig.app.json" && grep -qE '"strict"|noImplicitAny|strictNullChecks' "$REPO_ROOT/tsconfig.app.json" && TS_STRICT=1; } || true
           if [ "$TS_STRICT" -gt 0 ]; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Strict TypeScript is enabled: every value must be typed; use \`unknown\` instead of \`any\`"
-            PERSONA_NEVER="$PERSONA_NEVER\n- Never use \`any\` — strict TypeScript checks will fail"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Strict TypeScript: every value must be explicitly typed; use \`unknown\` instead of \`any\`"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never use \`any\` — the tsconfig has strict mode enabled"
           fi
           if echo "$PATTERNS" | grep -q 'Multi-tenant' 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Include \`tenant_id\` in every database query and mutation"
-            PERSONA_NEVER="$PERSONA_NEVER\n- Never query a table that has \`tenant_id\` without filtering on it"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Include \`tenant_id\` in every database query — RLS is enforced at PostgreSQL level"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never omit \`tenant_id\` from queries — RLS will silently return wrong data or nothing"
           fi
           if echo "$PATTERNS" | grep -q 'Auth' 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use the project's existing auth hooks/context for all authentication checks"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use the project's auth hooks/context for all auth checks, never roll your own"
             PERSONA_NEVER="$PERSONA_NEVER\n- Never hard-code user IDs or bypass auth guards"
           fi
           if has_dep "$DEPS" "zod" 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Validate all external/user data with Zod schemas before use"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Validate all external/user data with Zod schemas; use \`zodResolver\` with react-hook-form"
           fi
           if has_dep "$DEPS" "@tanstack/react-query" 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use TanStack Query (\`useQuery\`/\`useMutation\`) for server state; never store fetched data in \`useState\`"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use TanStack Query (\`useQuery\`/\`useMutation\`) for all server state — never fetch into \`useState\`"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never use \`useEffect\` + \`fetch\` when TanStack Query can handle it"
           fi
           if has_dep "$DEPS" "zustand" 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use Zustand stores (in \`src/stores/\`) for client-side global state"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use Zustand stores in \`src/stores/\` for client-side global state"
           fi
           if has_dep "$DEPS" "@supabase/supabase-js" 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Call Edge Functions via \`supabase.functions.invoke()\` and check both \`error\` and \`data.success\`"
-          fi
-          if has_dep "$ALL_DEPS" "react-hook-form" 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use \`react-hook-form\` with \`zodResolver\` for all form validation"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Edge Functions: call via \`supabase.functions.invoke()\`, always check \`error\` AND \`data?.success\`"
           fi
           if has_dep "$ALL_DEPS" "i18next" 2>/dev/null || has_dep "$DEPS" "react-i18next" 2>/dev/null; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Wrap all user-visible strings in \`t('key')\`; never hard-code UI text"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Wrap every user-visible string in \`t('key')\`; add to \`src/i18n/locales/\` if new"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never hard-code UI text strings — always use \`t('key')\`"
           fi
           if echo "${FRAMEWORKS[*]:-}" | grep -qi "FastAPI"; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Use async/await for all route handlers; define request/response shapes with Pydantic models"
-            PERSONA_NEVER="$PERSONA_NEVER\n- Never write synchronous FastAPI route handlers"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- All route handlers must be \`async\`; model all I/O with Pydantic"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never write synchronous FastAPI route handlers or use bare dicts for request/response"
           fi
           if echo "${LANGUAGES[*]:-}" | grep -q "Go"; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Handle every \`error\` return value explicitly"
-            PERSONA_NEVER="$PERSONA_NEVER\n- Never use blank identifier \`_\` to discard Go errors"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Handle every \`error\` return explicitly — wrap with context using \`fmt.Errorf(\"...: %w\", err)\`"
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never discard Go errors with \`_\`"
           fi
           if has_dir "supabase/functions"; then
-            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Edge Functions use Deno runtime — use \`Deno.serve()\` and import from \`jsr:\` or \`npm:\`"
+            PERSONA_ALWAYS="$PERSONA_ALWAYS\n- Edge Functions run on Deno — use \`Deno.serve()\`, import from \`jsr:\`/\`npm:\`, no Node built-ins"
+          fi
+          if { grep -rl 'navigate-to-section\|VALID_SECTIONS' "$REPO_ROOT/src" 2>/dev/null || true; } | grep -q .; then
+            PERSONA_NEVER="$PERSONA_NEVER\n- Never use \`<Link>\`, \`useNavigate()\`, or URL params for in-app navigation — use the section event"
           fi
           [ -z "$PERSONA_ALWAYS" ] && PERSONA_ALWAYS="\n- Follow existing code patterns and conventions in this repository"
 
-          PERSONA="You are an expert developer working on **$REPO_NAME** — a $PERSONA_TYPE.\n\n$OVERVIEW\n\n### Always\n$PERSONA_ALWAYS\n\n### Never\n$PERSONA_NEVER"
+          # Build main persona
+          PERSONA="You are an expert developer working on **$REPO_NAME** — a $PERSONA_TYPE.\n\n> $OVERVIEW"
+          [ -n "$PERSONA_ARCH" ] && PERSONA="$PERSONA\n\n### Architecture context\n$PERSONA_ARCH"
+          PERSONA="$PERSONA\n\n### Always\n$PERSONA_ALWAYS\n\n### Never\n$PERSONA_NEVER"
+
+          # ── Sub-personas: per-module context ──────────────────────────────────
+          SUB_PERSONAS=""
+          COMP_BASE="$REPO_ROOT/src/components"
+          HOOKS_BASE="$REPO_ROOT/src/hooks"
+          FUNCS_BASE="$REPO_ROOT/supabase/functions"
+          SKIP_MODS="ui|common|shared|layout|forms|auth|providers|__tests__|charts|export|assets"
+
+          # React: detect modules from src/components/ subdirectories
+          if [ -d "$COMP_BASE" ] && has_file "package.json"; then
+            for mod_dir in "$COMP_BASE"/*/; do
+              [ -d "$mod_dir" ] || continue
+              mod=$(basename "$mod_dir")
+              echo "$mod" | grep -qE "^($SKIP_MODS)$" && continue
+              FCOUNT=$(find "$mod_dir" -name "*.tsx" -o -name "*.ts" 2>/dev/null | wc -l | tr -d ' ')
+              [ "${FCOUNT:-0}" -eq 0 ] && continue
+
+              # Convert module name to PascalCase for hook prefix matching
+              MOD_PASCAL=$(echo "$mod" | awk 'BEGIN{FS="-";OFS=""}{for(i=1;i<=NF;i++)$i=toupper(substr($i,1,1))substr($i,2)}1')
+              MOD_UPPER=$(echo "$mod" | tr '[:lower:]-' '[:upper:]_' | tr -d '_')
+
+              MOD_HOOKS=""
+              if [ -d "$HOOKS_BASE" ]; then
+                # Primary: hooks actually imported inside this module's components
+                IMPORTED=$(grep -roh "use[A-Z][A-Za-z0-9]*" "$mod_dir" 2>/dev/null | \
+                    { grep -xF -f <(ls "$HOOKS_BASE" 2>/dev/null | sed 's/\.[^.]*$//') || true; } | \
+                    sort -u | head -10)
+                # Fallback: name-prefix match
+                NAME_MATCH=$(ls "$HOOKS_BASE" 2>/dev/null | \
+                    { grep -iE "^use($mod|$MOD_PASCAL|$MOD_UPPER)[A-Z._-]" 2>/dev/null || true; } | \
+                    { grep -v "README\|\.md$\|example" 2>/dev/null || true; } | \
+                    sed 's/\.[^.]*$//' | sort -u | head -8)
+                MOD_HOOKS=$(printf '%s\n%s' "$IMPORTED" "$NAME_MATCH" | sort -u | \
+                    { grep -v '^$' || true; } | head -10 | \
+                    tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+              fi
+
+              MOD_FUNCS=""
+              if [ -d "$FUNCS_BASE" ]; then
+                MOD_SHORT=$(echo "$mod" | cut -d'-' -f1)
+                MOD_FUNCS=$(ls "$FUNCS_BASE" 2>/dev/null | \
+                    { grep -iE "^(${mod}|${MOD_SHORT})(-|$)" 2>/dev/null || true; } | \
+                    { grep -v '\.sh$' 2>/dev/null || true; } | \
+                    head -6 | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+              fi
+
+              MOD_TABLES=""
+              if [ -n "${TABLE_NAMES:-}" ]; then
+                MOD_PREFIX=$(echo "$mod" | tr '-' '_' | tr '[:upper:]' '[:lower:]')
+                MOD_TABLES=$(echo "$TABLE_NAMES" | \
+                    { grep -E "^${MOD_PREFIX}(_|$)" 2>/dev/null || true; } | \
+                    head -8 | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+              fi
+
+              ENTRY="\n### \`$mod\` — \`src/components/$mod/\` ($FCOUNT files)"
+              [ -n "$MOD_HOOKS" ] && ENTRY="$ENTRY\n- **Hooks:** \`$(echo "$MOD_HOOKS" | sed 's/, /\`, \`/g')\`"
+              [ -n "$MOD_FUNCS" ] && ENTRY="$ENTRY\n- **Edge Functions:** \`$(echo "$MOD_FUNCS" | sed 's/, /\`, \`/g')\`"
+              [ -n "$MOD_TABLES" ] && ENTRY="$ENTRY\n- **DB Tables:** \`$(echo "$MOD_TABLES" | sed 's/, /\`, \`/g')\`"
+              SUB_PERSONAS="$SUB_PERSONAS$ENTRY"
+            done
+          fi
+
+          # Python: detect sub-modules from src/ subdirectories
+          if echo "${LANGUAGES[*]:-}" | grep -q "Python" && [ -d "$REPO_ROOT/src" ]; then
+            for mod_dir in "$REPO_ROOT/src"/*/; do
+              [ -d "$mod_dir" ] || continue
+              mod=$(basename "$mod_dir")
+              echo "$mod" | grep -qE "^(__pycache__|__init__|tests)$" && continue
+              PY_COUNT=$(find "$mod_dir" -name "*.py" 2>/dev/null | wc -l | tr -d ' ')
+              [ "${PY_COUNT:-0}" -eq 0 ] && continue
+              PY_FILES=$(ls "$mod_dir"*.py 2>/dev/null | xargs -I{} basename {} .py | head -6 | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g' || true)
+              ENTRY="\n### \`src/$mod/\` ($PY_COUNT .py files)"
+              [ -n "$PY_FILES" ] && ENTRY="$ENTRY\n- **Files:** \`$(echo "$PY_FILES" | sed 's/, /\`, \`/g')\`"
+              SUB_PERSONAS="$SUB_PERSONAS$ENTRY"
+            done
+          fi
+
+          # Go: detect sub-packages from cmd/, internal/, pkg/
+          if echo "${LANGUAGES[*]:-}" | grep -q "Go"; then
+            for godir in "cmd" "internal" "pkg"; do
+              [ -d "$REPO_ROOT/$godir" ] || continue
+              SUBPKGS=$(ls "$REPO_ROOT/$godir" 2>/dev/null | head -10 | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+              [ -n "$SUBPKGS" ] && SUB_PERSONAS="$SUB_PERSONAS\n\n### \`$godir/\`\n- **Packages:** \`$(echo "$SUBPKGS" | sed 's/, /\`, \`/g')\`"
+            done
+          fi
+
+          [ -z "$SUB_PERSONAS" ] && SUB_PERSONAS="\n_No sub-modules detected._"
 
           # Write output
           mkdir -p "$OUTPUT_DIR"
-          printf "<!-- AUTO-GENERATED by CISECSL/org-tools -->\n<!-- Last generated: %s -->\n\n# %s\n\n## Claude Persona\n\n%b\n\n## Overview\n\n%s\n\n## Tech Stack\n\n| Category | Technologies |\n|---|---|\n| Language | %s |\n| Framework | %s |\n| Build Tool | %s |\n| Database | %s |\n| Infrastructure | %s |\n\n## Commands\n\n%b\n\n## Directory Structure\n\n\`\`\`\n%s/%b\n\`\`\`\n\n## Key Files\n\n| File | Description |\n|---|---|\n%b\n\n## Entry Points\n\n%b\n\n## Environment Variables\n\n%b\n\n## Database Tables\n\n%b\n\n## Architecture Patterns\n\n%b\n\n## Dependencies\n\n%b\n\n---\n\n*Generated by [CISECSL/org-tools](https://github.com/CISECSL/org-tools) v1.0*\n*Last updated: %s*\n" \
-            "$TIMESTAMP" "$REPO_NAME" "$PERSONA" \
+          printf "<!-- AUTO-GENERATED by CISECSL/org-tools -->\n<!-- Last generated: %s -->\n\n# %s\n\n## Claude Persona\n\n%b\n\n## Module Sub-Personas\n\n%b\n\n## Overview\n\n%s\n\n## Tech Stack\n\n| Category | Technologies |\n|---|---|\n| Language | %s |\n| Framework | %s |\n| Build Tool | %s |\n| Database | %s |\n| Infrastructure | %s |\n\n## Commands\n\n%b\n\n## Directory Structure\n\n\`\`\`\n%s/%b\n\`\`\`\n\n## Key Files\n\n| File | Description |\n|---|---|\n%b\n\n## Entry Points\n\n%b\n\n## Environment Variables\n\n%b\n\n## Database Tables\n\n%b\n\n## Architecture Patterns\n\n%b\n\n## Dependencies\n\n%b\n\n---\n\n*Generated by [CISECSL/org-tools](https://github.com/CISECSL/org-tools) v1.0*\n*Last updated: %s*\n" \
+            "$TIMESTAMP" "$REPO_NAME" "$PERSONA" "$SUB_PERSONAS" \
             "$OVERVIEW" \
             "$LANG_STR" "$FRMK_STR" "$BILD_STR" "$DB_STR" "$INFRA_STR" \
             "$COMMANDS" "$REPO_NAME" "$DIR_TREE" \
@@ -365,6 +484,29 @@ jobs:
             > "$OUTPUT_FILE"
 
           echo "✓ Generated $OUTPUT_FILE ($(wc -l < "$OUTPUT_FILE" | tr -d ' ') lines)"
+
+      - name: Generate repomix.xml
+        run: |
+          # Base ignore patterns — always excluded
+          IGNORE="node_modules/**,dist/**,build/**,.next/**,coverage/**,target/**,vendor/**"
+          IGNORE="$IGNORE,*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml"
+          IGNORE="$IGNORE,*.min.js,*.min.css,*.map,*.snap"
+
+          # If no repo-level repomix.config.json, add common generated-file exclusions
+          if [ ! -f repomix.config.json ]; then
+            IGNORE="$IGNORE,src/components/ui/**"
+            IGNORE="$IGNORE,src/integrations/supabase/types.ts"
+            IGNORE="$IGNORE,**/*.d.ts,**/__generated__/**"
+          fi
+
+          npx --yes repomix \
+            --compress \
+            --output .claude/repomix.xml \
+            --style xml \
+            --ignore "$IGNORE"
+
+          SIZE=$(wc -c < .claude/repomix.xml | tr -d ' ')
+          echo "✓ Generated .claude/repomix.xml (${SIZE} bytes)"
 
       - name: Install Notion dependencies
         run: npm install --prefix /tmp/notion-sync @notionhq/client @tryfabric/martian --silent
@@ -462,10 +604,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f .claude/context.md
+          git add -f .claude/context.md .claude/repomix.xml
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "docs: update auto-generated context.md"
+            git commit -m "docs: update auto-generated context.md and repomix.xml"
             git push
           fi
