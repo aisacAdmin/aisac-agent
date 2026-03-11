@@ -132,7 +132,7 @@ serve(async (req: Request) => {
     // 5. Get AISAC platform URLs and anon key from environment
     const heartbeatUrl = Deno.env.get("AISAC_HEARTBEAT_URL") || `${supabaseUrl}/functions/v1/agent-heartbeat`;
     const ingestUrl = Deno.env.get("AISAC_INGEST_URL") || `${supabaseUrl}/functions/v1/syslog-ingest`;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+    const supabaseAnonKey = Deno.env.get("AISAC_ANON_JWT") || Deno.env.get("SUPABASE_ANON_KEY") || "";
 
     // 6. Return full config for the install script
     return new Response(

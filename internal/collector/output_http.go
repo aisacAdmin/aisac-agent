@@ -181,11 +181,11 @@ func (o *HTTPOutput) preparePayload(events []*LogEvent) ([]byte, error) {
 	// Convert each LogEvent to a JSON string (API expects array of strings)
 	messages := make([]string, 0, len(events))
 	for _, event := range events {
-		eventJSON, err := json.Marshal(event)
+		msg, err := o.marshalEvent(event)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling event: %w", err)
 		}
-		messages = append(messages, string(eventJSON))
+		messages = append(messages, msg)
 	}
 
 	payload := IngestPayload{
@@ -194,6 +194,33 @@ func (o *HTTPOutput) preparePayload(events []*LogEvent) ([]byte, error) {
 	}
 
 	return json.Marshal(payload)
+}
+
+// marshalEvent serializes a LogEvent for the ingest API.
+// It sends the raw log line so syslog-ingest can parse each format natively:
+//   - Wazuh alerts: prefixed with "wazuh: " so parseSyslogMessage detects the
+//     source and tryExtractWazuhData extracts rule.id/rule.level for severity.
+//   - Syslog: the raw RFC3164/5424 line so parseSyslogMessage parses it correctly.
+//   - Other sources with raw data: sent as-is.
+//
+// Only falls back to JSON-serializing the LogEvent struct when Raw is empty.
+func (o *HTTPOutput) marshalEvent(event *LogEvent) (string, error) {
+	if event.Source == "wazuh_alerts" && event.Raw != "" {
+		return "wazuh: " + event.Raw, nil
+	}
+
+	// For syslog and other sources, send the raw line directly so
+	// syslog-ingest can parse the native format (RFC3164, JSON, etc.)
+	if event.Raw != "" {
+		return event.Raw, nil
+	}
+
+	// Fallback: serialize the LogEvent struct (should rarely happen)
+	b, err := json.Marshal(event)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // compress compresses the payload using gzip.
@@ -223,8 +250,10 @@ func (o *HTTPOutput) doRequest(ctx context.Context, data []byte) error {
 	req.Header.Set("User-Agent", "AISAC-Collector/1.0")
 
 	if o.cfg.APIKey != "" {
-		// Use X-API-Key header as expected by AISAC platform
 		req.Header.Set("X-API-Key", o.cfg.APIKey)
+	}
+	if o.cfg.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+o.cfg.AuthToken)
 	}
 
 	if DebugCollector {

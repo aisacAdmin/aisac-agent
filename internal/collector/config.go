@@ -31,10 +31,11 @@ type OutputConfig struct {
 	Type          string        `yaml:"type"` // "http" or "opensearch"
 	URL           string        `yaml:"url"`
 	APIKey        string        `yaml:"api_key"`
-	AssetID       string        `yaml:"asset_id"` // Asset ID for AISAC platform
-	Username      string        `yaml:"username"` // For OpenSearch basic auth
-	Password      string        `yaml:"password"` // For OpenSearch basic auth
-	Index         string        `yaml:"index"`    // For OpenSearch index pattern
+	AuthToken     string        `yaml:"auth_token"` // JWT token for Supabase gateway auth
+	AssetID       string        `yaml:"asset_id"`   // Asset ID for AISAC platform
+	Username      string        `yaml:"username"`   // For OpenSearch basic auth
+	Password      string        `yaml:"password"`   // For OpenSearch basic auth
+	Index         string        `yaml:"index"`      // For OpenSearch index pattern
 	Timeout       time.Duration `yaml:"timeout"`
 	RetryAttempts int           `yaml:"retry_attempts"`
 	RetryDelay    time.Duration `yaml:"retry_delay"`

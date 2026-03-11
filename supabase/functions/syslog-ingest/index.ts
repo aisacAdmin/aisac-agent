@@ -9,21 +9,27 @@
 //   OR
 //   Authorization: Bearer aisac_xxxxxxxxxxxx
 //
-// Expected body:
+// Accepted body formats:
+//
+//   Format 1 (events array - direct objects):
 //   {
 //     "events": [
-//       {
-//         "@timestamp": "ISO8601",
-//         "source": "suricata",
-//         "host": "hostname",
-//         "message": "raw message",
-//         "fields": { ... parsed fields ... }
-//       }
+//       { "@timestamp": "ISO8601", "source": "suricata", "host": "hostname", ... }
+//     ]
+//   }
+//
+//   Format 2 (messages array - from AISAC Collector, may be gzip-compressed):
+//   {
+//     "asset_id": "uuid",
+//     "messages": [
+//       "{\"@timestamp\":\"ISO8601\",\"source\":\"suricata\", ...}",
+//       "{\"@timestamp\":\"ISO8601\",\"source\":\"syslog\", ...}"
 //     ]
 //   }
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { gunzip } from "https://deno.land/x/compress@v0.4.5/gzip/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -41,7 +47,10 @@ interface LogEvent {
 }
 
 interface IngestPayload {
-  events: LogEvent[];
+  events?: LogEvent[];
+  // Collector format: asset_id + messages (JSON-stringified events)
+  asset_id?: string;
+  messages?: string[];
 }
 
 interface IngestResponse {
@@ -101,17 +110,41 @@ serve(async (req: Request) => {
       );
     }
 
-    // Parse body
-    const payload: IngestPayload = await req.json();
+    // Parse body (supports gzip-compressed payloads from the collector)
+    let payload: IngestPayload;
+    const contentEncoding = req.headers.get("Content-Encoding") || "";
 
-    if (!payload.events || !Array.isArray(payload.events)) {
+    if (contentEncoding.includes("gzip")) {
+      const compressed = new Uint8Array(await req.arrayBuffer());
+      const decompressed = gunzip(compressed);
+      payload = JSON.parse(new TextDecoder().decode(decompressed));
+    } else {
+      payload = await req.json();
+    }
+
+    // Normalize: accept both { events: [...] } and { messages: ["...", "..."] }
+    let events: LogEvent[] = [];
+
+    if (payload.events && Array.isArray(payload.events)) {
+      // Format 1: direct event objects
+      events = payload.events;
+    } else if (payload.messages && Array.isArray(payload.messages)) {
+      // Format 2: collector sends JSON-stringified events
+      events = payload.messages.map((msg) => {
+        try {
+          return typeof msg === "string" ? JSON.parse(msg) : msg;
+        } catch {
+          return { "@timestamp": new Date().toISOString(), source: "unknown", host: "unknown", message: msg };
+        }
+      });
+    } else {
       return new Response(
-        JSON.stringify({ success: false, message: "Missing or invalid events array" }),
+        JSON.stringify({ success: false, message: "Missing or invalid events/messages array" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (payload.events.length === 0) {
+    if (events.length === 0) {
       return new Response(
         JSON.stringify({ success: true, received: 0, stored: 0, message: "No events to process" }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -144,7 +177,10 @@ serve(async (req: Request) => {
       );
     }
 
-    if (!validation || !validation.is_valid) {
+    // RPC returns a TABLE (array of rows) — extract the first result
+    const validationRow = Array.isArray(validation) ? validation[0] : validation;
+
+    if (!validationRow || !validationRow.is_valid) {
       console.error("Invalid API Key");
       return new Response(
         JSON.stringify({ success: false, message: "Invalid API Key" }),
@@ -152,10 +188,10 @@ serve(async (req: Request) => {
       );
     }
 
-    const { asset_id, tenant_id, asset_name } = validation;
+    const { asset_id, tenant_id, asset_name } = validationRow;
 
     // Prepare events for insertion with tenant_id and asset_id
-    const eventsToInsert = payload.events.map((event) => ({
+    const eventsToInsert = events.map((event) => ({
       tenant_id: tenant_id,
       monitored_asset_id: asset_id,
       timestamp: event["@timestamp"] || new Date().toISOString(),
@@ -191,7 +227,7 @@ serve(async (req: Request) => {
           return new Response(
             JSON.stringify({
               success: true,
-              received: payload.events.length,
+              received: events.length,
               stored: 0,
               message: "Events received but storage unavailable"
             }),
@@ -212,7 +248,7 @@ serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           success: true,
-          received: payload.events.length,
+          received: events.length,
           stored: storedCount,
           message: `Successfully stored ${storedCount} events`
         }),
@@ -235,7 +271,7 @@ serve(async (req: Request) => {
 
     const response: IngestResponse = {
       success: true,
-      received: payload.events.length,
+      received: events.length,
       stored: storedCount,
       message: `Successfully stored ${storedCount} events`,
     };

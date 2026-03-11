@@ -85,9 +85,9 @@ serve(async (req: Request) => {
       });
     }
 
-    // Validate API key format: ak_<64 hex chars> or aisac_<48 hex chars>
-    const validAkFormat = apiKey.startsWith('ak_') && /^ak_[0-9a-f]{63}$/.test(apiKey);
-    const validAisacFormat = apiKey.startsWith('aisac_') && /^aisac_[0-9a-f]{48}$/.test(apiKey);
+    // Validate API key format
+    const validAkFormat = apiKey.startsWith('ak_') && apiKey.length === 66;
+    const validAisacFormat = apiKey.startsWith('aisac_') && apiKey.length === 54;
     if (!validAkFormat && !validAisacFormat) {
       return new Response(
         JSON.stringify({ error: 'Invalid API key format. Expected: ak_<64 hex chars> or aisac_<48 hex chars>' }),
@@ -159,20 +159,47 @@ serve(async (req: Request) => {
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 5. Verify API key and get asset
-    // Compare API key directly (keys stored as ak_<64 hex> or aisac_<48 hex>)
+    // 5. Verify API key using the same RPC as install-config
+    const { data: validation, error: validationError } = await supabase
+      .rpc('validate_asset_api_key', { p_api_key: apiKey });
+
+    if (validationError) {
+      console.error('API key validation error:', validationError.message);
+      return new Response(JSON.stringify({ error: 'API key validation failed' }), {
+        status: 401,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
+    const validationResult = Array.isArray(validation) ? validation[0] : validation;
+
+    if (!validationResult || !validationResult.is_valid) {
+      console.warn(`Invalid API key attempt for asset: ${payload.asset_id}`);
+      return new Response(JSON.stringify({ error: 'Invalid API key or asset not found' }), {
+        status: 401,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Verify the API key belongs to the asset in the payload
+    if (validationResult.asset_id !== payload.asset_id) {
+      console.warn(`API key asset mismatch: key belongs to ${validationResult.asset_id}, payload says ${payload.asset_id}`);
+      return new Response(JSON.stringify({ error: 'API key does not match asset_id' }), {
+        status: 401,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Get full asset data for status update
     const { data: asset, error: assetError } = await supabase
       .from('monitored_assets')
       .select('id, tenant_id, criticality, ingestion_enabled, status')
       .eq('id', payload.asset_id)
-      .eq('api_key', apiKey)
       .single();
 
     if (assetError || !asset) {
-      // Log failed attempt for security audit
-      console.warn(`Invalid API key attempt for asset: ${payload.asset_id}`, assetError?.message);
-      return new Response(JSON.stringify({ error: 'Invalid API key or asset not found' }), {
-        status: 401,
+      return new Response(JSON.stringify({ error: 'Asset not found' }), {
+        status: 404,
         headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       });
     }
