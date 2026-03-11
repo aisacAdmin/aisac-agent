@@ -3,127 +3,75 @@ name: Deploy Staging
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Branch or SHA to deploy to staging (default: main)'
+        description: 'Branch or SHA to deploy (default: main)'
         required: false
         default: 'main'
 
 concurrency:
   group: deploy-staging
-  cancel-in-progress: false  # queue behind any in-progress staging deploy
+  cancel-in-progress: false
 
 permissions:
   contents: read
   packages: write
 
 env:
-  REGISTRY: ghcr.io
   AGENT_IMAGE: ghcr.io/cisecsl/aisac/agent
   SERVER_IMAGE: ghcr.io/cisecsl/aisac/server
 
 jobs:
-  build-and-test:
-    name: Build & Test
+  prepare:
+    name: Prepare
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      ref: ${{ steps.ref.outputs.ref }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-          cache: true
+      - name: Resolve ref
+        id: ref
+        run: echo "ref=${{ github.event.inputs.ref || github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Determine version
         id: version
-        run: echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" >> "$GITHUB_OUTPUT"
-
-      - name: Run tests
-        run: go test -v -race ./...
-
-      - name: Build binaries
-        run: make build
+        run: echo "version=$(git describe --tags --always 2>/dev/null || echo 'dev')" >> "$GITHUB_OUTPUT"
 
   deploy-edge-functions:
-    name: Deploy Edge Functions (Staging)
-    needs: build-and-test
+    name: Deploy Edge Functions
+    needs: prepare
+    uses: ./.github/workflows/_deploy-functions.yml
+    with:
+      environment: staging
+      ref: ${{ needs.prepare.outputs.ref }}
+    secrets:
+      supabase_access_token: ${{ secrets.SUPABASE_STAGING_ACCESS_TOKEN }}
+      supabase_project_id: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+
+  docker-push:
+    name: Push Docker Images
+    needs: prepare
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
-
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
-      - name: Deploy functions with retry
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_STAGING_ACCESS_TOKEN }}
-          PROJECT_REF: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
-        run: |
-          deploy_function() {
-            local func=$1
-            local attempt=0
-            local max_attempts=5
-            local delay=15
-
-            echo "Deploying $func..."
-            while true; do
-              if supabase functions deploy "$func" --project-ref "$PROJECT_REF"; then
-                echo "Successfully deployed $func"
-                return 0
-              fi
-              attempt=$((attempt + 1))
-              if [ $attempt -ge $max_attempts ]; then
-                echo "::error::Failed to deploy $func after $max_attempts attempts"
-                return 1
-              fi
-              echo "::warning::Attempt $attempt failed for $func. Retrying in ${delay}s..."
-              sleep $delay
-              delay=$((delay * 2))
-            done
-          }
-
-          failed=0
-          for func_dir in supabase/functions/*/; do
-            func=$(basename "$func_dir")
-            if [ ! -f "supabase/functions/$func/index.ts" ]; then
-              echo "Skipping $func (no index.ts)"
-              continue
-            fi
-            deploy_function "$func" || failed=1
-          done
-
-          if [ $failed -ne 0 ]; then
-            exit 1
-          fi
-
-  docker-push:
-    name: Push Docker Images (Staging)
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -131,7 +79,7 @@ jobs:
 
       - name: Docker metadata (agent)
         id: meta-agent
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.AGENT_IMAGE }}
           tags: |
@@ -148,7 +96,7 @@ jobs:
           tags: ${{ steps.meta-agent.outputs.tags }}
           labels: ${{ steps.meta-agent.outputs.labels }}
           build-args: |
-            VERSION=${{ needs.build-and-test.outputs.version }}
+            VERSION=${{ needs.prepare.outputs.version }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha
@@ -156,7 +104,7 @@ jobs:
 
       - name: Docker metadata (server)
         id: meta-server
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.SERVER_IMAGE }}
           tags: |
@@ -173,22 +121,30 @@ jobs:
           tags: ${{ steps.meta-server.outputs.tags }}
           labels: ${{ steps.meta-server.outputs.labels }}
           build-args: |
-            VERSION=${{ needs.build-and-test.outputs.version }}
+            VERSION=${{ needs.prepare.outputs.version }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  health-check:
-    name: Health Check
-    needs: [docker-push, deploy-edge-functions]
+  summary:
+    name: Summary
+    needs: [prepare, deploy-edge-functions, docker-push]
     runs-on: ubuntu-latest
-    continue-on-error: true
+    if: always()
     steps:
-      - name: Check staging health
+      - name: Post summary
         run: |
-          echo "## Staging Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Version:** ${{ needs.build-and-test.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Agent image:** ${{ env.AGENT_IMAGE }}:staging" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Server image:** ${{ env.SERVER_IMAGE }}:staging" >> "$GITHUB_STEP_SUMMARY"
+          STATUS="✅ SUCCESS"
+          if [[ "${{ needs.docker-push.result }}" != "success" || "${{ needs.deploy-edge-functions.result }}" != "success" ]]; then
+            STATUS="❌ FAILED"
+          fi
+          echo "## $STATUS — Staging Deploy" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Version** | \`${{ needs.prepare.outputs.version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Agent image** | \`${{ env.AGENT_IMAGE }}:staging\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Server image** | \`${{ env.SERVER_IMAGE }}:staging\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Edge Functions** | ${{ needs.deploy-edge-functions.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Docker Push** | ${{ needs.docker-push.result }} |" >> "$GITHUB_STEP_SUMMARY"
