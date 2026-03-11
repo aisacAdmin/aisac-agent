@@ -27,6 +27,7 @@ type Collector struct {
 	output  Output
 	batcher *Batcher
 	tailers []*Tailer
+	pollers []*Poller
 	eventCh chan *LogEvent
 
 	mu      sync.RWMutex
@@ -102,7 +103,7 @@ func (c *Collector) Start(ctx context.Context) error {
 		}
 	}()
 
-	// Start tailers for each source
+	// Start inputs for each source
 	startFromEnd := c.cfg.File.StartPosition == "end"
 	for _, source := range c.cfg.Sources {
 		// Get parser for source
@@ -116,6 +117,18 @@ func (c *Collector) Start(ctx context.Context) error {
 			continue
 		}
 
+		if source.Type == "api" {
+			// API-based source (e.g., Wazuh API)
+			if err := c.startAPISource(ctx, source, parser); err != nil {
+				c.logger.Error().
+					Err(err).
+					Str("source", source.Name).
+					Msg("Failed to start API source, skipping")
+			}
+			continue
+		}
+
+		// File-based source
 		// Expand path (supports glob patterns)
 		paths, err := ExpandPath(source.Path)
 		if err != nil {
@@ -173,6 +186,7 @@ func (c *Collector) Start(ctx context.Context) error {
 
 	c.logger.Info().
 		Int("tailers", len(c.tailers)).
+		Int("pollers", len(c.pollers)).
 		Msg("Collector started")
 
 	// Start sincedb saver
@@ -222,6 +236,44 @@ func (c *Collector) Stop() error {
 	return nil
 }
 
+// startAPISource creates and starts an API-based source (e.g., Wazuh API).
+func (c *Collector) startAPISource(ctx context.Context, source SourceConfig, parser Parser) error {
+	var client APIClient
+	var err error
+
+	switch source.Parser {
+	case "wazuh_alerts":
+		client, err = NewWazuhClient(source.API, c.logger)
+		if err != nil {
+			return fmt.Errorf("creating Wazuh client: %w", err)
+		}
+	default:
+		return fmt.Errorf("no API client available for parser %q", source.Parser)
+	}
+
+	poller, err := NewPoller(source, parser, c.sincedb, c.eventCh, c.logger, c.cfg.TenantID, client)
+	if err != nil {
+		return fmt.Errorf("creating poller: %w", err)
+	}
+
+	c.pollers = append(c.pollers, poller)
+
+	c.wg.Add(1)
+	go func(p *Poller) {
+		defer c.wg.Done()
+		if err := p.Run(ctx); err != nil && err != context.Canceled {
+			c.logger.Error().Err(err).Str("source", source.Name).Msg("Poller error")
+		}
+	}(poller)
+
+	c.logger.Info().
+		Str("source", source.Name).
+		Str("parser", source.Parser).
+		Msg("API source started")
+
+	return nil
+}
+
 // sincedbSaver periodically saves sincedb to disk.
 func (c *Collector) sincedbSaver(ctx context.Context) {
 	ticker := time.NewTicker(SinceDBSaveInterval)
@@ -249,6 +301,7 @@ func (c *Collector) Stats() CollectorStats {
 	stats := CollectorStats{
 		Running:      c.running,
 		TailerCount:  len(c.tailers),
+		PollerCount:  len(c.pollers),
 		SourceCount:  len(c.cfg.Sources),
 		ChannelUsage: len(c.eventCh),
 		ChannelSize:  cap(c.eventCh),
@@ -269,6 +322,7 @@ func (c *Collector) Stats() CollectorStats {
 type CollectorStats struct {
 	Running      bool            `json:"running"`
 	TailerCount  int             `json:"tailer_count"`
+	PollerCount  int             `json:"poller_count"`
 	SourceCount  int             `json:"source_count"`
 	ChannelUsage int             `json:"channel_usage"`
 	ChannelSize  int             `json:"channel_size"`
