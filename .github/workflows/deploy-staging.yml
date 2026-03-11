@@ -1,22 +1,24 @@
-name: Deploy Production
+name: Deploy Staging
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
   workflow_dispatch:
     inputs:
-      confirm:
-        description: 'Type "DEPLOY" to confirm production deployment'
-        required: true
-        type: string
+      ref:
+        description: 'Branch or SHA to deploy (default: main)'
+        required: false
+        default: 'main'
 
 concurrency:
-  group: deploy-production
+  group: deploy-staging
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 env:
@@ -25,47 +27,42 @@ env:
 
 jobs:
   prepare:
-    name: Pre-deploy Validation
+    name: Prepare
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      ref: ${{ steps.ref.outputs.ref }}
     steps:
-      - name: Validate manual confirmation
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          if [ "${{ github.event.inputs.confirm }}" != "DEPLOY" ]; then
-            echo "::error::You must type DEPLOY to confirm production deployment"
-            exit 1
-          fi
-
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
+
+      - name: Resolve ref
+        id: ref
+        run: echo "ref=${{ github.event.inputs.ref || github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Determine version
         id: version
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=$(git describe --tags --always 2>/dev/null || echo 'dev')" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "version=$(git describe --tags --always 2>/dev/null || echo 'dev')" >> "$GITHUB_OUTPUT"
 
   deploy-edge-functions:
     name: Deploy Edge Functions
     needs: prepare
     uses: ./.github/workflows/_deploy-functions.yml
     with:
-      environment: production
+      environment: staging
+      ref: ${{ needs.prepare.outputs.ref }}
 
   docker-push:
     name: Push Docker Images
     needs: prepare
     runs-on: ubuntu-latest
-    environment: production
+    environment: staging
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
 
       - uses: docker/setup-qemu-action@v4
@@ -83,10 +80,8 @@ jobs:
         with:
           images: ${{ env.AGENT_IMAGE }}
           tags: |
-            type=raw,value=latest
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+            type=raw,value=staging
+            type=sha,prefix=staging-
 
       - name: Build and push agent
         uses: docker/build-push-action@v7
@@ -110,10 +105,8 @@ jobs:
         with:
           images: ${{ env.SERVER_IMAGE }}
           tags: |
-            type=raw,value=latest
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+            type=raw,value=staging
+            type=sha,prefix=staging-
 
       - name: Build and push server
         uses: docker/build-push-action@v7
@@ -131,47 +124,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  health-check:
-    name: Production Health Check
-    needs: [prepare, docker-push, deploy-edge-functions]
+  summary:
+    name: Summary
+    needs: [prepare, deploy-edge-functions, docker-push]
     runs-on: ubuntu-latest
+    if: always()
     steps:
-      - name: Summary
+      - name: Post summary
         run: |
-          echo "## ✅ Production Deployed" >> "$GITHUB_STEP_SUMMARY"
+          STATUS="✅ SUCCESS"
+          if [[ "${{ needs.docker-push.result }}" != "success" || "${{ needs.deploy-edge-functions.result }}" != "success" ]]; then
+            STATUS="❌ FAILED"
+          fi
+          echo "## $STATUS — Staging Deploy" >> "$GITHUB_STEP_SUMMARY"
           echo "| | |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Version** | \`${{ needs.prepare.outputs.version }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Commit** | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Agent image** | \`${{ env.AGENT_IMAGE }}:latest\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Server image** | \`${{ env.SERVER_IMAGE }}:latest\` |" >> "$GITHUB_STEP_SUMMARY"
-          # Uncomment when PRODUCTION_HEALTH_URL secret is configured:
-          # for i in 1 2 3 4 5; do
-          #   curl -sf "${{ secrets.PRODUCTION_HEALTH_URL }}/api/v1/health" && exit 0
-          #   echo "Attempt $i failed, retrying in 30s..."; sleep 30
-          # done
-          # echo "::error::Health check failed after 5 attempts"; exit 1
-
-  release:
-    name: GitHub Release
-    needs: [health-check]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-          cache: true
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "| **Agent image** | \`${{ env.AGENT_IMAGE }}:staging\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Server image** | \`${{ env.SERVER_IMAGE }}:staging\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Edge Functions** | ${{ needs.deploy-edge-functions.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Docker Push** | ${{ needs.docker-push.result }} |" >> "$GITHUB_STEP_SUMMARY"
