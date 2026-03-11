@@ -30,14 +30,14 @@ func TestWazuhClientAuthenticate(t *testing.T) {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != "testuser" || pass != "testpass" {
 			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"error":   401,
 				"message": "Invalid credentials",
 			})
 			return
 		}
 
-		json.NewEncoder(w).Encode(WazuhAuthResponse{
+		_ = json.NewEncoder(w).Encode(WazuhAuthResponse{
 			Data: struct {
 				Token string `json:"token"`
 			}{Token: "test-jwt-token"},
@@ -70,7 +70,7 @@ func TestWazuhClientAuthenticate(t *testing.T) {
 func TestWazuhClientAuthenticateInvalidCreds(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":   401,
 			"message": "Invalid credentials",
 		})
@@ -101,7 +101,7 @@ func TestWazuhClientFetchAlerts(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/security/user/authenticate":
-			json.NewEncoder(w).Encode(WazuhAuthResponse{
+			_ = json.NewEncoder(w).Encode(WazuhAuthResponse{
 				Data: struct {
 					Token string `json:"token"`
 				}{Token: "test-jwt-token"},
@@ -123,7 +123,7 @@ func TestWazuhClientFetchAlerts(t *testing.T) {
 			resp := WazuhAlertsResponse{}
 			resp.Data.AffectedItems = []json.RawMessage{json.RawMessage(alertJSON)}
 			resp.Data.TotalAffectedItems = 1
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			http.NotFound(w, r)
 		}
@@ -162,7 +162,7 @@ func TestWazuhClientFetchAlertsWithMinRuleLevel(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/security/user/authenticate":
-			json.NewEncoder(w).Encode(WazuhAuthResponse{
+			_ = json.NewEncoder(w).Encode(WazuhAuthResponse{
 				Data: struct {
 					Token string `json:"token"`
 				}{Token: "test-jwt-token"},
@@ -176,7 +176,7 @@ func TestWazuhClientFetchAlertsWithMinRuleLevel(t *testing.T) {
 			resp := WazuhAlertsResponse{}
 			resp.Data.AffectedItems = []json.RawMessage{}
 			resp.Data.TotalAffectedItems = 0
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			http.NotFound(w, r)
 		}
@@ -208,7 +208,7 @@ func TestWazuhClientTokenRefresh(t *testing.T) {
 		switch r.URL.Path {
 		case "/security/user/authenticate":
 			authCount++
-			json.NewEncoder(w).Encode(WazuhAuthResponse{
+			_ = json.NewEncoder(w).Encode(WazuhAuthResponse{
 				Data: struct {
 					Token string `json:"token"`
 				}{Token: "token-v" + string(rune('0'+authCount))},
@@ -216,7 +216,7 @@ func TestWazuhClientTokenRefresh(t *testing.T) {
 		case "/alerts":
 			resp := WazuhAlertsResponse{}
 			resp.Data.AffectedItems = []json.RawMessage{}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}
 	}))
 	defer server.Close()
