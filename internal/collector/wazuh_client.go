@@ -264,14 +264,6 @@ func (c *WazuhClient) Close() error {
 	return nil
 }
 
-// truncate truncates a string to maxLen characters.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 // marshalAlertToRaw converts a json.RawMessage alert to a raw JSON string
 // suitable for the existing WazuhAlertParser.
 func marshalAlertToRaw(alert json.RawMessage) string {
