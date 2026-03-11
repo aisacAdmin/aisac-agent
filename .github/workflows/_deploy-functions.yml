@@ -1,0 +1,64 @@
+name: Deploy Edge Functions (Reusable)
+
+# Secrets are NOT passed from the caller — they are read directly from the
+# GitHub Environment (staging / production). Each environment must have:
+#   SUPABASE_ACCESS_TOKEN   — personal access token for that project
+#   SUPABASE_PROJECT_ID     — project ref (e.g. abcdefghijkl)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment: staging or production'
+        required: true
+        type: string
+      ref:
+        description: 'Git ref to checkout (branch, tag, or SHA). Defaults to caller SHA.'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  deploy:
+    name: Edge Functions → ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_ID }}
+        run: |
+          deploy_function() {
+            local func=$1 attempt=0 max=5 delay=15
+            while true; do
+              supabase functions deploy "$func" --project-ref "$PROJECT_REF" && return 0
+              attempt=$((attempt + 1))
+              if [ $attempt -ge $max ]; then
+                echo "::error::Failed to deploy $func after $max attempts"
+                return 1
+              fi
+              echo "::warning::Deploy $func attempt $attempt failed. Retrying in ${delay}s..."
+              sleep $delay
+              delay=$((delay * 2))
+            done
+          }
+
+          failed=0
+          for func_dir in supabase/functions/*/; do
+            func=$(basename "$func_dir")
+            if [ ! -f "supabase/functions/$func/index.ts" ]; then
+              echo "Skipping $func (no index.ts)"
+              continue
+            fi
+            deploy_function "$func" || failed=1
+          done
+          exit $failed
