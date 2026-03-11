@@ -2,13 +2,13 @@ name: Deploy Staging
 
 on:
   push:
-    branches: [dev]
+    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Branch or SHA to deploy to staging (default: dev)'
+        description: 'Branch or SHA to deploy to staging (default: main)'
         required: false
-        default: 'dev'
+        default: 'main'
 
 concurrency:
   group: deploy-staging
