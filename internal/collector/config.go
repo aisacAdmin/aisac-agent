@@ -19,11 +19,23 @@ type Config struct {
 // SourceConfig defines a log source to collect.
 type SourceConfig struct {
 	Name   string            `yaml:"name"`
-	Type   string            `yaml:"type"` // "json_file", "file"
+	Type   string            `yaml:"type"` // "json_file", "file", "api"
 	Path   string            `yaml:"path"`
 	Parser string            `yaml:"parser"` // "suricata_eve", "syslog", "json", "wazuh_alerts"
 	Tags   []string          `yaml:"tags"`   // Tags to add to events from this source
 	Fields map[string]string `yaml:"fields"` // Additional fields to add to events
+	API    *APISourceConfig  `yaml:"api,omitempty"`
+}
+
+// APISourceConfig holds configuration for API-based log sources (e.g., Wazuh API).
+type APISourceConfig struct {
+	URL           string        `yaml:"url"`             // API base URL (set via AISAC_WAZUH_API_URL)
+	Username      string        `yaml:"username"`        // API username (set via AISAC_WAZUH_API_USER)
+	Password      string        `yaml:"password"`        // API password (set via AISAC_WAZUH_API_PASSWORD)
+	PollInterval  time.Duration `yaml:"poll_interval"`   // How often to poll for new alerts (default: 30s)
+	PageSize      int           `yaml:"page_size"`       // Items per API page (default: 500, max: 500)
+	SkipTLSVerify bool          `yaml:"skip_tls_verify"` // Skip TLS certificate verification
+	MinRuleLevel  int           `yaml:"min_rule_level"`  // Minimum Wazuh rule level to fetch (0 = all)
 }
 
 // OutputConfig defines where to send collected logs.
@@ -117,15 +129,6 @@ func (s *SourceConfig) Validate(index int) error {
 		return fmt.Errorf("collector.sources[%d].name is required", index)
 	}
 
-	if s.Path == "" {
-		return fmt.Errorf("collector.sources[%d].path is required", index)
-	}
-
-	validTypes := map[string]bool{"json_file": true, "file": true}
-	if s.Type != "" && !validTypes[s.Type] {
-		return fmt.Errorf("collector.sources[%d].type must be 'json_file' or 'file'", index)
-	}
-
 	if s.Parser == "" {
 		return fmt.Errorf("collector.sources[%d].parser is required", index)
 	}
@@ -135,7 +138,59 @@ func (s *SourceConfig) Validate(index int) error {
 		return fmt.Errorf("collector.sources[%d].parser must be one of: suricata_eve, syslog, json, wazuh_alerts", index)
 	}
 
+	// wazuh_alerts requires type: api
+	if s.Parser == "wazuh_alerts" && s.Type != "api" {
+		return fmt.Errorf("collector.sources[%d]: wazuh_alerts parser requires type: api (use Wazuh API instead of file)", index)
+	}
+
+	validTypes := map[string]bool{"json_file": true, "file": true, "api": true}
+	if s.Type != "" && !validTypes[s.Type] {
+		return fmt.Errorf("collector.sources[%d].type must be 'json_file', 'file', or 'api'", index)
+	}
+
+	if s.Type == "api" {
+		if s.API == nil {
+			return fmt.Errorf("collector.sources[%d].api configuration is required for type 'api'", index)
+		}
+		if err := s.API.Validate(index); err != nil {
+			return err
+		}
+	} else {
+		// File-based sources require a path
+		if s.Path == "" {
+			return fmt.Errorf("collector.sources[%d].path is required", index)
+		}
+	}
+
 	return nil
+}
+
+// Validate validates API source configuration.
+func (a *APISourceConfig) Validate(index int) error {
+	// URL, Username, Password are expected from env vars, so we only validate
+	// them at runtime (in WazuhClient constructor), not here.
+
+	if a.PollInterval < 0 {
+		return fmt.Errorf("collector.sources[%d].api.poll_interval must not be negative", index)
+	}
+
+	if a.PageSize < 0 || a.PageSize > 500 {
+		return fmt.Errorf("collector.sources[%d].api.page_size must be between 0 and 500", index)
+	}
+
+	if a.MinRuleLevel < 0 || a.MinRuleLevel > 15 {
+		return fmt.Errorf("collector.sources[%d].api.min_rule_level must be between 0 and 15", index)
+	}
+
+	return nil
+}
+
+// DefaultAPISourceConfig returns default API source configuration.
+func DefaultAPISourceConfig() *APISourceConfig {
+	return &APISourceConfig{
+		PollInterval: 30 * time.Second,
+		PageSize:     500,
+	}
 }
 
 // Validate validates output configuration.
