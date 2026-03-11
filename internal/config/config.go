@@ -261,6 +261,9 @@ func (c *AgentConfig) applyEnvOverrides() {
 		c.Heartbeat.URL = heartbeatURL
 	}
 
+	// Wazuh API environment overrides (credentials MUST come from env vars)
+	c.applyWazuhEnvOverrides()
+
 	// Registration environment overrides
 	if regURL := os.Getenv("AISAC_REGISTER_URL"); regURL != "" {
 		c.Registration.URL = regURL
@@ -270,6 +273,41 @@ func (c *AgentConfig) applyEnvOverrides() {
 	}
 	if csToken := os.Getenv("AISAC_CS_TOKEN"); csToken != "" {
 		c.Registration.CommandServerToken = csToken
+	}
+}
+
+// applyWazuhEnvOverrides applies Wazuh API environment variables to any
+// collector source with parser "wazuh_alerts" and type "api".
+func (c *AgentConfig) applyWazuhEnvOverrides() {
+	wazuhURL := os.Getenv("AISAC_WAZUH_API_URL")
+	wazuhUser := os.Getenv("AISAC_WAZUH_API_USER")
+	wazuhPass := os.Getenv("AISAC_WAZUH_API_PASSWORD")
+
+	// Nothing to apply if no env vars are set
+	if wazuhURL == "" && wazuhUser == "" && wazuhPass == "" {
+		return
+	}
+
+	for i := range c.Collector.Sources {
+		src := &c.Collector.Sources[i]
+		if src.Parser != "wazuh_alerts" || src.Type != "api" {
+			continue
+		}
+
+		// Ensure API config exists
+		if src.API == nil {
+			src.API = &collector.APISourceConfig{}
+		}
+
+		if wazuhURL != "" {
+			src.API.URL = wazuhURL
+		}
+		if wazuhUser != "" {
+			src.API.Username = wazuhUser
+		}
+		if wazuhPass != "" {
+			src.API.Password = wazuhPass
+		}
 	}
 }
 
