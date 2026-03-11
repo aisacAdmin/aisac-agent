@@ -34,7 +34,7 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.11.3
+          version: latest
 
   test:
     name: Test with Coverage
