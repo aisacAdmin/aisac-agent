@@ -11,6 +11,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false  # queue behind any in-progress production deploy
+
 permissions:
   contents: write
   packages: write
