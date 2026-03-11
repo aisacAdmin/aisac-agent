@@ -17,13 +17,14 @@ type SinceDB struct {
 	dirty   bool
 }
 
-// SinceDBEntry represents a tracked file position.
+// SinceDBEntry represents a tracked file position or API polling cursor.
 type SinceDBEntry struct {
-	Path     string    `json:"path"`
-	Inode    uint64    `json:"inode"`
-	Device   uint64    `json:"device"`
-	Offset   int64     `json:"offset"`
-	Modified time.Time `json:"modified"`
+	Path      string    `json:"path"`
+	Inode     uint64    `json:"inode"`
+	Device    uint64    `json:"device"`
+	Offset    int64     `json:"offset"`
+	Timestamp time.Time `json:"timestamp,omitempty"` // For API sources: last seen alert timestamp
+	Modified  time.Time `json:"modified"`
 }
 
 // NewSinceDB creates a new SinceDB instance.
@@ -133,6 +134,30 @@ func (s *SinceDB) RemoveStale(maxAge time.Duration) {
 			s.dirty = true
 		}
 	}
+}
+
+// GetTimestamp returns the stored timestamp for an API source, or zero time if not found.
+func (s *SinceDB) GetTimestamp(key string) time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if entry, ok := s.entries[key]; ok {
+		return entry.Timestamp
+	}
+	return time.Time{}
+}
+
+// SetTimestamp updates the stored timestamp for an API source.
+func (s *SinceDB) SetTimestamp(key string, ts time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.entries[key] = &SinceDBEntry{
+		Path:      key,
+		Timestamp: ts,
+		Modified:  time.Now(),
+	}
+	s.dirty = true
 }
 
 // fileKey generates a unique key for a file based on inode and device.
