@@ -152,7 +152,7 @@ jobs:
 
       - name: Docker metadata (agent)
         id: meta-agent
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.AGENT_IMAGE }}
           tags: |
@@ -179,7 +179,7 @@ jobs:
 
       - name: Docker metadata (server)
         id: meta-server
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.SERVER_IMAGE }}
           tags: |
