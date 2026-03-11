@@ -6,7 +6,7 @@ on:
       ref:
         description: 'Branch or SHA to deploy (e.g. feature/my-feature)'
         required: true
-        default: 'dev'
+        default: 'main'
       skip_migrations:
         description: 'Skip edge function deploy (faster for agent-only changes)'
         required: false
