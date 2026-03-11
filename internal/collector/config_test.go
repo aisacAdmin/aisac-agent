@@ -175,6 +175,125 @@ func TestSourceConfigValidation(t *testing.T) {
 	}
 }
 
+func TestAPISourceConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  SourceConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid api source",
+			source: SourceConfig{
+				Name:   "wazuh_alerts",
+				Type:   "api",
+				Parser: "wazuh_alerts",
+				API: &APISourceConfig{
+					PollInterval: 30 * time.Second,
+					PageSize:     500,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "wazuh_alerts with file type is rejected",
+			source: SourceConfig{
+				Name:   "wazuh_alerts",
+				Type:   "file",
+				Path:   "/var/ossec/logs/alerts/alerts.json",
+				Parser: "wazuh_alerts",
+			},
+			wantErr: true,
+			errMsg:  "wazuh_alerts parser requires type: api",
+		},
+		{
+			name: "wazuh_alerts with empty type is rejected",
+			source: SourceConfig{
+				Name:   "wazuh_alerts",
+				Path:   "/var/ossec/logs/alerts/alerts.json",
+				Parser: "wazuh_alerts",
+			},
+			wantErr: true,
+			errMsg:  "wazuh_alerts parser requires type: api",
+		},
+		{
+			name: "api source missing api config",
+			source: SourceConfig{
+				Name:   "wazuh_alerts",
+				Type:   "api",
+				Parser: "wazuh_alerts",
+			},
+			wantErr: true,
+			errMsg:  "api configuration is required",
+		},
+		{
+			name: "api source path not required",
+			source: SourceConfig{
+				Name:   "wazuh_alerts",
+				Type:   "api",
+				Parser: "wazuh_alerts",
+				API: &APISourceConfig{
+					PageSize: 100,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "api source page_size too large",
+			source: SourceConfig{
+				Name:   "wazuh_alerts",
+				Type:   "api",
+				Parser: "wazuh_alerts",
+				API: &APISourceConfig{
+					PageSize: 1000,
+				},
+			},
+			wantErr: true,
+			errMsg:  "page_size must be between 0 and 500",
+		},
+		{
+			name: "api source invalid min_rule_level",
+			source: SourceConfig{
+				Name:   "wazuh_alerts",
+				Type:   "api",
+				Parser: "wazuh_alerts",
+				API: &APISourceConfig{
+					MinRuleLevel: 20,
+				},
+			},
+			wantErr: true,
+			errMsg:  "min_rule_level must be between 0 and 15",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.source.Validate(0)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" && err != nil {
+				if !contains(err.Error(), tt.errMsg) {
+					t.Errorf("Validate() error = %q, want to contain %q", err.Error(), tt.errMsg)
+				}
+			}
+		})
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestOutputConfigValidation(t *testing.T) {
 	tests := []struct {
 		name    string
