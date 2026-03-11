@@ -116,6 +116,23 @@ collector:
 
   # Log sources to collect
   sources:
+    # Wazuh alerts via API (Manager only)
+    # Credentials MUST be set via environment variables:
+    #   AISAC_WAZUH_API_URL=https://localhost:55000
+    #   AISAC_WAZUH_API_USER=wazuh-wui
+    #   AISAC_WAZUH_API_PASSWORD=<your-password>
+    # - name: wazuh_alerts
+    #   type: api
+    #   parser: wazuh_alerts
+    #   tags:
+    #     - wazuh
+    #     - hids
+    #   api:
+    #     poll_interval: 30s
+    #     page_size: 500
+    #     skip_tls_verify: true
+    #     min_rule_level: 3
+
     # Suricata EVE JSON logs
     - name: suricata
       type: file
