@@ -162,7 +162,7 @@ jobs:
             type=sha
 
       - name: Build and push agent
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile.agent
@@ -189,7 +189,7 @@ jobs:
             type=sha
 
       - name: Build and push server
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile.server
