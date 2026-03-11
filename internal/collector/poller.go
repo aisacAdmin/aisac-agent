@@ -2,7 +2,6 @@ package collector
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -205,21 +204,3 @@ func (p *Poller) poll(ctx context.Context, since time.Time) (time.Time, error) {
 	return latestTimestamp, nil
 }
 
-// extractTimestampFromRaw extracts the timestamp from a raw Wazuh alert JSON.
-// This is used as a fallback when the parser doesn't set a timestamp.
-func extractTimestampFromRaw(raw json.RawMessage) time.Time {
-	var partial struct {
-		Timestamp string `json:"timestamp"`
-	}
-	if err := json.Unmarshal(raw, &partial); err != nil {
-		return time.Time{}
-	}
-	t, err := time.Parse("2006-01-02T15:04:05.000-0700", partial.Timestamp)
-	if err != nil {
-		t, err = time.Parse(time.RFC3339, partial.Timestamp)
-		if err != nil {
-			return time.Time{}
-		}
-	}
-	return t
-}
