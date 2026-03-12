@@ -243,9 +243,9 @@ func (c *Collector) startAPISource(ctx context.Context, source SourceConfig, par
 
 	switch source.Parser {
 	case "wazuh_alerts":
-		client, err = NewWazuhClient(source.API, c.logger)
+		client, err = NewOpenSearchClient(source.API, c.logger)
 		if err != nil {
-			return fmt.Errorf("creating Wazuh client: %w", err)
+			return fmt.Errorf("creating OpenSearch client: %w", err)
 		}
 	default:
 		return fmt.Errorf("no API client available for parser %q", source.Parser)
