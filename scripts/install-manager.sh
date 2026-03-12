@@ -85,6 +85,7 @@ usage() {
     echo "  -u <REGISTER_URL>  Install-config endpoint (default: production)"
     echo "  -i                 Ignore hardware requirements check (for small VMs)"
     echo "  --no-indexer       Install only Wazuh Manager (no Indexer/Dashboard, ~500MB RAM)"
+    echo "  --no-dashboard     Install Indexer but skip Dashboard (saves ~200MB RAM)"
     echo "  --agent            Enable full asset capabilities (actions, safety, syslog)"
     echo "  --soar             Enable SOAR mode (mTLS + command server). Implies --agent"
     echo "  --uninstall        Uninstall everything (Wazuh Manager, AISAC Agent, data)"
@@ -307,7 +308,7 @@ EOCFG
             sed -i 's|<enabled>yes</enabled>\(.*indexer\)|<enabled>no</enabled>\1|' /var/ossec/etc/ossec.conf 2>/dev/null || true
         fi
     else
-        # Full mode: Indexer + Server + Dashboard
+        # Indexer + Server (Dashboard is optional)
         log_info "Installing Wazuh Indexer..."
         bash /tmp/wazuh-install.sh --wazuh-indexer wazuh-indexer ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
 
@@ -317,8 +318,12 @@ EOCFG
         log_info "Installing Wazuh Server..."
         bash /tmp/wazuh-install.sh --wazuh-server "${WAZUH_SERVER_NAME}" ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
 
-        log_info "Installing Wazuh Dashboard..."
-        bash /tmp/wazuh-install.sh --wazuh-dashboard wazuh-dashboard ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
+        if [ "$NO_DASHBOARD" = false ]; then
+            log_info "Installing Wazuh Dashboard..."
+            bash /tmp/wazuh-install.sh --wazuh-dashboard wazuh-dashboard ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
+        else
+            log_info "Skipping Wazuh Dashboard (--no-dashboard)"
+        fi
     fi
 
     # Verify
@@ -334,52 +339,58 @@ EOCFG
 }
 
 #==============================================================================
-# Extract Wazuh API password for wazuh-wui user
+# Extract OpenSearch (Wazuh Indexer) admin password
 #==============================================================================
 
-extract_wazuh_api_password() {
-    WAZUH_API_PASSWORD=""
+extract_opensearch_password() {
+    OPENSEARCH_PASSWORD=""
+
+    # Only needed when Indexer is installed
+    if [ "$NO_INDEXER" = true ]; then
+        log_info "No Indexer installed — skipping OpenSearch password extraction"
+        return
+    fi
 
     # Method 1: Extract from wazuh-install-files.tar using wazuh-install.sh -p
     if [ -f /tmp/wazuh-install.sh ] && [ -f /tmp/wazuh-install-files.tar ]; then
-        log_info "Extracting Wazuh API password from install files..."
+        log_info "Extracting OpenSearch admin password from install files..."
         local passwords_output
         passwords_output=$(bash /tmp/wazuh-install.sh -p 2>/dev/null) || true
         if [ -n "$passwords_output" ]; then
-            WAZUH_API_PASSWORD=$(echo "$passwords_output" | grep -A1 "wazuh-wui" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+            OPENSEARCH_PASSWORD=$(echo "$passwords_output" | grep -A1 "indexer" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
         fi
     fi
 
     # Method 2: Extract from wazuh-passwords.txt if it exists
-    if [ -z "$WAZUH_API_PASSWORD" ] && [ -f /tmp/wazuh-install-files/wazuh-passwords.txt ]; then
-        WAZUH_API_PASSWORD=$(grep -A1 "wazuh-wui" /tmp/wazuh-install-files/wazuh-passwords.txt | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+    if [ -z "$OPENSEARCH_PASSWORD" ] && [ -f /tmp/wazuh-install-files/wazuh-passwords.txt ]; then
+        OPENSEARCH_PASSWORD=$(grep -A1 "indexer" /tmp/wazuh-install-files/wazuh-passwords.txt | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
     fi
 
     # Method 3: Try extracting passwords file from tar
-    if [ -z "$WAZUH_API_PASSWORD" ] && [ -f /tmp/wazuh-install-files.tar ]; then
+    if [ -z "$OPENSEARCH_PASSWORD" ] && [ -f /tmp/wazuh-install-files.tar ]; then
         local tmp_extract="/tmp/wazuh-pw-extract"
         mkdir -p "$tmp_extract"
         tar -xf /tmp/wazuh-install-files.tar -C "$tmp_extract" 2>/dev/null || true
         if [ -f "$tmp_extract/wazuh-install-files/wazuh-passwords.txt" ]; then
-            WAZUH_API_PASSWORD=$(grep -A1 "wazuh-wui" "$tmp_extract/wazuh-install-files/wazuh-passwords.txt" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+            OPENSEARCH_PASSWORD=$(grep -A1 "indexer" "$tmp_extract/wazuh-install-files/wazuh-passwords.txt" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
         fi
         rm -rf "$tmp_extract"
     fi
 
     # Method 4: Prompt the user
-    if [ -z "$WAZUH_API_PASSWORD" ]; then
-        log_warning "Could not auto-detect Wazuh API password for user 'wazuh-wui'"
-        echo -e "${YELLOW}The Wazuh API password is needed for alert collection via API.${NC}"
+    if [ -z "$OPENSEARCH_PASSWORD" ]; then
+        log_warning "Could not auto-detect OpenSearch admin password"
+        echo -e "${YELLOW}The OpenSearch password is needed for alert collection from Wazuh Indexer.${NC}"
         echo -e "${YELLOW}You can find it by running: sudo bash /tmp/wazuh-install.sh -p${NC}"
         echo ""
-        read -r -s -p "Enter Wazuh API password for user 'wazuh-wui' (or press Enter to skip): " WAZUH_API_PASSWORD
+        read -r -s -p "Enter OpenSearch admin password (or press Enter to skip): " OPENSEARCH_PASSWORD
         echo ""
     fi
 
-    if [ -n "$WAZUH_API_PASSWORD" ]; then
-        log_success "Wazuh API password obtained"
+    if [ -n "$OPENSEARCH_PASSWORD" ]; then
+        log_success "OpenSearch admin password obtained"
     else
-        log_warning "Wazuh API password not set - you must set AISAC_WAZUH_API_PASSWORD in the systemd service manually"
+        log_warning "OpenSearch password not set - you must set AISAC_WAZUH_INDEXER_PASSWORD in the systemd service manually"
     fi
 }
 
@@ -1127,12 +1138,18 @@ EOF
     fi
 
     # ── Collector ──
-    cat >> "$CONFIG_DIR/agent.yaml" << EOF
-collector:
-  enabled: true
-
-  sources:
-    - name: wazuh_alerts
+    # Wazuh alerts source: file-based if --no-indexer, OpenSearch API if indexer installed
+    local wazuh_source
+    if [ "$NO_INDEXER" = true ]; then
+        wazuh_source="    - name: wazuh_alerts
+      type: file
+      path: /var/ossec/logs/alerts/alerts.json
+      parser: wazuh_alerts
+      tags:
+        - security
+        - hids"
+    else
+        wazuh_source="    - name: wazuh_alerts
       type: api
       parser: wazuh_alerts
       tags:
@@ -1140,11 +1157,19 @@ collector:
         - hids
       api:
         # Credentials set via environment variables in systemd service:
-        #   AISAC_WAZUH_API_URL, AISAC_WAZUH_API_USER, AISAC_WAZUH_API_PASSWORD
+        #   AISAC_WAZUH_INDEXER_URL, AISAC_WAZUH_INDEXER_USER, AISAC_WAZUH_INDEXER_PASSWORD
         poll_interval: 30s
         page_size: 500
         skip_tls_verify: true
-        min_rule_level: 3
+        min_rule_level: 3"
+    fi
+
+    cat >> "$CONFIG_DIR/agent.yaml" << EOF
+collector:
+  enabled: true
+
+  sources:
+${wazuh_source}
 ${suricata_source}
 ${syslog_source}
 
@@ -1234,6 +1259,15 @@ EOF
 install_service() {
     log_info "Installing systemd service..."
 
+    # OpenSearch env vars only when Indexer is installed
+    local wazuh_env_lines=""
+    if [ "$NO_INDEXER" = false ]; then
+        wazuh_env_lines="# OpenSearch (Wazuh Indexer) credentials for alert collection
+Environment=AISAC_WAZUH_INDEXER_URL=https://localhost:9200
+Environment=AISAC_WAZUH_INDEXER_USER=admin
+Environment=AISAC_WAZUH_INDEXER_PASSWORD=${OPENSEARCH_PASSWORD:-CHANGE_ME}"
+    fi
+
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
 Description=AISAC Security Agent
@@ -1251,10 +1285,7 @@ RestartSec=5
 StandardOutput=append:${LOG_DIR}/agent.log
 StandardError=append:${LOG_DIR}/agent.log
 
-# Wazuh API credentials for alert collection
-Environment=AISAC_WAZUH_API_URL=https://localhost:55000
-Environment=AISAC_WAZUH_API_USER=wazuh-wui
-Environment=AISAC_WAZUH_API_PASSWORD=${WAZUH_API_PASSWORD:-CHANGE_ME}
+${wazuh_env_lines}
 
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -1290,6 +1321,7 @@ main() {
     local API_KEY="" AUTH_TOKEN="" REGISTER_URL="$DEFAULT_REGISTER_URL"
     IGNORE_REQUIREMENTS=""
     NO_INDEXER=false
+    NO_DASHBOARD=false
     AGENT_MODE=false
     SOAR_ENABLED=false
 
@@ -1299,7 +1331,8 @@ main() {
             -t) AUTH_TOKEN="$2"; shift 2 ;;
             -u) REGISTER_URL="$2"; shift 2 ;;
             -i) IGNORE_REQUIREMENTS="-i"; shift ;;
-            --no-indexer) NO_INDEXER=true; shift ;;
+            --no-indexer) NO_INDEXER=true; NO_DASHBOARD=true; shift ;;
+            --no-dashboard) NO_DASHBOARD=true; shift ;;
             --agent) AGENT_MODE=true; shift ;;
             --soar) SOAR_ENABLED=true; AGENT_MODE=true; shift ;;
             --uninstall)
@@ -1361,7 +1394,7 @@ main() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
     install_wazuh_manager
-    extract_wazuh_api_password
+    extract_opensearch_password
 
     # ── Step: Fetch AISAC config ──
     step=$((step + 1))
@@ -1465,10 +1498,14 @@ main() {
     echo -e "  ${CYAN}AISAC Agent:${NC}     systemctl status aisac-agent"
     echo -e "  ${CYAN}Agent Logs:${NC}      tail -f ${LOG_DIR}/agent.log"
     echo -e "  ${CYAN}Agent Config:${NC}    ${CONFIG_DIR}/agent.yaml"
-    echo -e "  ${CYAN}Wazuh API:${NC}       https://localhost:55000 (wazuh-wui)"
-
     if [ "$NO_INDEXER" = false ]; then
-        echo -e "  ${CYAN}Wazuh Dashboard:${NC} https://${PRIVATE_IP} (admin/admin)"
+        echo -e "  ${CYAN}Wazuh Indexer:${NC}   https://localhost:9200 (admin)"
+        if [ "$NO_DASHBOARD" = false ]; then
+            echo -e "  ${CYAN}Wazuh Dashboard:${NC} https://${PRIVATE_IP} (admin)"
+        fi
+        echo -e "  ${CYAN}Alert source:${NC}    OpenSearch API (wazuh-alerts-* index)"
+    else
+        echo -e "  ${CYAN}Alert source:${NC}    File (/var/ossec/logs/alerts/alerts.json)"
     fi
 
     if [ "$SOAR_ENABLED" = true ]; then
