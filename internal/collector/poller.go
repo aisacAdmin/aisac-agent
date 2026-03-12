@@ -25,8 +25,8 @@ const (
 type APIClient interface {
 	// Authenticate performs initial authentication with the API.
 	Authenticate(ctx context.Context) error
-	// FetchAlerts retrieves alerts newer than 'since' with pagination.
-	FetchAlerts(ctx context.Context, since time.Time, limit, offset int) (*WazuhAlertsResponse, error)
+	// FetchWazuhAlerts retrieves Wazuh alerts newer than 'since' with pagination.
+	FetchWazuhAlerts(ctx context.Context, since time.Time, limit, offset int) (*WazuhAlertsResponse, error)
 }
 
 // Poller polls an API source for log events at a configured interval.
@@ -142,7 +142,7 @@ func (p *Poller) poll(ctx context.Context, since time.Time) (time.Time, error) {
 	for page := 0; page < MaxPagesPerPoll; page++ {
 		offset := page * p.pageSize
 
-		resp, err := p.client.FetchAlerts(ctx, since, p.pageSize, offset)
+		resp, err := p.client.FetchWazuhAlerts(ctx, since, p.pageSize, offset)
 		if err != nil {
 			if totalProcessed > 0 {
 				// We already processed some pages, save progress

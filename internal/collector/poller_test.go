@@ -27,7 +27,7 @@ func (m *mockAPIClient) Authenticate(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockAPIClient) FetchAlerts(ctx context.Context, since time.Time, limit, offset int) (*WazuhAlertsResponse, error) {
+func (m *mockAPIClient) FetchWazuhAlerts(ctx context.Context, since time.Time, limit, offset int) (*WazuhAlertsResponse, error) {
 	m.fetchCalls++
 	if m.fetchAlertsFn != nil {
 		return m.fetchAlertsFn(ctx, since, limit, offset)
@@ -274,6 +274,6 @@ func TestPollerResumesFromSavedTimestamp(t *testing.T) {
 	<-ctx.Done()
 
 	if !receivedSince.Equal(savedTS) {
-		t.Errorf("FetchAlerts received since = %v, want %v (should resume from saved timestamp)", receivedSince, savedTS)
+		t.Errorf("FetchWazuhAlerts received since = %v, want %v (should resume from saved timestamp)", receivedSince, savedTS)
 	}
 }
