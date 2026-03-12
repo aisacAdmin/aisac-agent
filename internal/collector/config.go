@@ -27,13 +27,13 @@ type SourceConfig struct {
 	API    *APISourceConfig  `yaml:"api,omitempty"`
 }
 
-// APISourceConfig holds configuration for API-based log sources (e.g., Wazuh API).
+// APISourceConfig holds configuration for API-based log sources (e.g., OpenSearch/Wazuh Indexer).
 type APISourceConfig struct {
-	URL           string        `yaml:"url"`             // API base URL (set via AISAC_WAZUH_API_URL)
-	Username      string        `yaml:"username"`        // API username (set via AISAC_WAZUH_API_USER)
-	Password      string        `yaml:"password"`        // API password (set via AISAC_WAZUH_API_PASSWORD)
+	URL           string        `yaml:"url"`             // API base URL (set via AISAC_WAZUH_INDEXER_URL)
+	Username      string        `yaml:"username"`        // API username (set via AISAC_WAZUH_INDEXER_USER)
+	Password      string        `yaml:"password"`        // API password (set via AISAC_WAZUH_INDEXER_PASSWORD)
 	PollInterval  time.Duration `yaml:"poll_interval"`   // How often to poll for new alerts (default: 30s)
-	PageSize      int           `yaml:"page_size"`       // Items per API page (default: 500, max: 500)
+	PageSize      int           `yaml:"page_size"`       // Items per API page (default: 500, max: 10000)
 	SkipTLSVerify bool          `yaml:"skip_tls_verify"` // Skip TLS certificate verification
 	MinRuleLevel  int           `yaml:"min_rule_level"`  // Minimum Wazuh rule level to fetch (0 = all)
 }
@@ -138,11 +138,6 @@ func (s *SourceConfig) Validate(index int) error {
 		return fmt.Errorf("collector.sources[%d].parser must be one of: suricata_eve, syslog, json, wazuh_alerts", index)
 	}
 
-	// wazuh_alerts requires type: api
-	if s.Parser == "wazuh_alerts" && s.Type != "api" {
-		return fmt.Errorf("collector.sources[%d]: wazuh_alerts parser requires type: api (use Wazuh API instead of file)", index)
-	}
-
 	validTypes := map[string]bool{"json_file": true, "file": true, "api": true}
 	if s.Type != "" && !validTypes[s.Type] {
 		return fmt.Errorf("collector.sources[%d].type must be 'json_file', 'file', or 'api'", index)
@@ -174,8 +169,8 @@ func (a *APISourceConfig) Validate(index int) error {
 		return fmt.Errorf("collector.sources[%d].api.poll_interval must not be negative", index)
 	}
 
-	if a.PageSize < 0 || a.PageSize > 500 {
-		return fmt.Errorf("collector.sources[%d].api.page_size must be between 0 and 500", index)
+	if a.PageSize < 0 || a.PageSize > 10000 {
+		return fmt.Errorf("collector.sources[%d].api.page_size must be between 0 and 10000", index)
 	}
 
 	if a.MinRuleLevel < 0 || a.MinRuleLevel > 15 {
