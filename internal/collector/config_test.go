@@ -196,25 +196,23 @@ func TestAPISourceConfigValidation(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "wazuh_alerts with file type is rejected",
+			name: "wazuh_alerts with file type is valid",
 			source: SourceConfig{
 				Name:   "wazuh_alerts",
 				Type:   "file",
 				Path:   "/var/ossec/logs/alerts/alerts.json",
 				Parser: "wazuh_alerts",
 			},
-			wantErr: true,
-			errMsg:  "wazuh_alerts parser requires type: api",
+			wantErr: false,
 		},
 		{
-			name: "wazuh_alerts with empty type is rejected",
+			name: "wazuh_alerts with default type and path is valid",
 			source: SourceConfig{
 				Name:   "wazuh_alerts",
 				Path:   "/var/ossec/logs/alerts/alerts.json",
 				Parser: "wazuh_alerts",
 			},
-			wantErr: true,
-			errMsg:  "wazuh_alerts parser requires type: api",
+			wantErr: false,
 		},
 		{
 			name: "api source missing api config",
@@ -245,11 +243,11 @@ func TestAPISourceConfigValidation(t *testing.T) {
 				Type:   "api",
 				Parser: "wazuh_alerts",
 				API: &APISourceConfig{
-					PageSize: 1000,
+					PageSize: 20000,
 				},
 			},
 			wantErr: true,
-			errMsg:  "page_size must be between 0 and 500",
+			errMsg:  "page_size must be between 0 and 10000",
 		},
 		{
 			name: "api source invalid min_rule_level",
