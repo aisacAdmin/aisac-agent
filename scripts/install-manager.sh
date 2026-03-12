@@ -70,7 +70,7 @@ print_banner() {
     echo "║                                                               ║"
     echo "║           AISAC Manager Installer v2.0                        ║"
     echo "║                                                               ║"
-    echo "║   Installs: Wazuh Manager + AISAC ${mode}$(printf '%*s' $((25 - ${#mode})) '')║"
+    echo "║   Installs: Wazuh Manager + AISAC ${mode}$(printf '%*s' $((25 - ${#mode})) '')   ║"
     echo "║                                                               ║"
     echo "╚═══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -331,6 +331,56 @@ EOCFG
     fi
 
     log_success "Wazuh Manager installed"
+}
+
+#==============================================================================
+# Extract Wazuh API password for wazuh-wui user
+#==============================================================================
+
+extract_wazuh_api_password() {
+    WAZUH_API_PASSWORD=""
+
+    # Method 1: Extract from wazuh-install-files.tar using wazuh-install.sh -p
+    if [ -f /tmp/wazuh-install.sh ] && [ -f /tmp/wazuh-install-files.tar ]; then
+        log_info "Extracting Wazuh API password from install files..."
+        local passwords_output
+        passwords_output=$(bash /tmp/wazuh-install.sh -p 2>/dev/null) || true
+        if [ -n "$passwords_output" ]; then
+            WAZUH_API_PASSWORD=$(echo "$passwords_output" | grep -A1 "wazuh-wui" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+        fi
+    fi
+
+    # Method 2: Extract from wazuh-passwords.txt if it exists
+    if [ -z "$WAZUH_API_PASSWORD" ] && [ -f /tmp/wazuh-install-files/wazuh-passwords.txt ]; then
+        WAZUH_API_PASSWORD=$(grep -A1 "wazuh-wui" /tmp/wazuh-install-files/wazuh-passwords.txt | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+    fi
+
+    # Method 3: Try extracting passwords file from tar
+    if [ -z "$WAZUH_API_PASSWORD" ] && [ -f /tmp/wazuh-install-files.tar ]; then
+        local tmp_extract="/tmp/wazuh-pw-extract"
+        mkdir -p "$tmp_extract"
+        tar -xf /tmp/wazuh-install-files.tar -C "$tmp_extract" 2>/dev/null || true
+        if [ -f "$tmp_extract/wazuh-install-files/wazuh-passwords.txt" ]; then
+            WAZUH_API_PASSWORD=$(grep -A1 "wazuh-wui" "$tmp_extract/wazuh-install-files/wazuh-passwords.txt" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+        fi
+        rm -rf "$tmp_extract"
+    fi
+
+    # Method 4: Prompt the user
+    if [ -z "$WAZUH_API_PASSWORD" ]; then
+        log_warning "Could not auto-detect Wazuh API password for user 'wazuh-wui'"
+        echo -e "${YELLOW}The Wazuh API password is needed for alert collection via API.${NC}"
+        echo -e "${YELLOW}You can find it by running: sudo bash /tmp/wazuh-install.sh -p${NC}"
+        echo ""
+        read -r -s -p "Enter Wazuh API password for user 'wazuh-wui' (or press Enter to skip): " WAZUH_API_PASSWORD
+        echo ""
+    fi
+
+    if [ -n "$WAZUH_API_PASSWORD" ]; then
+        log_success "Wazuh API password obtained"
+    else
+        log_warning "Wazuh API password not set - you must set AISAC_WAZUH_API_PASSWORD in the systemd service manually"
+    fi
 }
 
 #==============================================================================
@@ -1083,12 +1133,18 @@ collector:
 
   sources:
     - name: wazuh_alerts
-      type: file
-      path: /var/ossec/logs/alerts/alerts.json
+      type: api
       parser: wazuh_alerts
       tags:
         - security
         - hids
+      api:
+        # Credentials set via environment variables in systemd service:
+        #   AISAC_WAZUH_API_URL, AISAC_WAZUH_API_USER, AISAC_WAZUH_API_PASSWORD
+        poll_interval: 30s
+        page_size: 500
+        skip_tls_verify: true
+        min_rule_level: 3
 ${suricata_source}
 ${syslog_source}
 
@@ -1195,6 +1251,11 @@ RestartSec=5
 StandardOutput=append:${LOG_DIR}/agent.log
 StandardError=append:${LOG_DIR}/agent.log
 
+# Wazuh API credentials for alert collection
+Environment=AISAC_WAZUH_API_URL=https://localhost:55000
+Environment=AISAC_WAZUH_API_USER=wazuh-wui
+Environment=AISAC_WAZUH_API_PASSWORD=${WAZUH_API_PASSWORD:-CHANGE_ME}
+
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -1216,7 +1277,7 @@ EOF
     if systemctl is-active --quiet "$SERVICE_NAME"; then
         log_success "AISAC Agent is running"
     else
-        log_warning "AISAC Agent may not be running yet (alerts.json may not exist until first agent connects)"
+        log_warning "AISAC Agent may not be running yet (check Wazuh API connectivity)"
         log_info "Check: journalctl -u ${SERVICE_NAME} -n 20"
     fi
 }
@@ -1300,6 +1361,7 @@ main() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
     install_wazuh_manager
+    extract_wazuh_api_password
 
     # ── Step: Fetch AISAC config ──
     step=$((step + 1))
@@ -1403,7 +1465,7 @@ main() {
     echo -e "  ${CYAN}AISAC Agent:${NC}     systemctl status aisac-agent"
     echo -e "  ${CYAN}Agent Logs:${NC}      tail -f ${LOG_DIR}/agent.log"
     echo -e "  ${CYAN}Agent Config:${NC}    ${CONFIG_DIR}/agent.yaml"
-    echo -e "  ${CYAN}Wazuh Alerts:${NC}    /var/ossec/logs/alerts/alerts.json"
+    echo -e "  ${CYAN}Wazuh API:${NC}       https://localhost:55000 (wazuh-wui)"
 
     if [ "$NO_INDEXER" = false ]; then
         echo -e "  ${CYAN}Wazuh Dashboard:${NC} https://${PRIVATE_IP} (admin/admin)"
