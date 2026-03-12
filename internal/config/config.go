@@ -261,8 +261,8 @@ func (c *AgentConfig) applyEnvOverrides() {
 		c.Heartbeat.URL = heartbeatURL
 	}
 
-	// Wazuh API environment overrides (credentials MUST come from env vars)
-	c.applyWazuhEnvOverrides()
+	// Wazuh Indexer (OpenSearch) environment overrides (credentials MUST come from env vars)
+	c.applyWazuhIndexerEnvOverrides()
 
 	// Registration environment overrides
 	if regURL := os.Getenv("AISAC_REGISTER_URL"); regURL != "" {
@@ -276,12 +276,23 @@ func (c *AgentConfig) applyEnvOverrides() {
 	}
 }
 
-// applyWazuhEnvOverrides applies Wazuh API environment variables to any
-// collector source with parser "wazuh_alerts" and type "api".
-func (c *AgentConfig) applyWazuhEnvOverrides() {
-	wazuhURL := os.Getenv("AISAC_WAZUH_API_URL")
-	wazuhUser := os.Getenv("AISAC_WAZUH_API_USER")
-	wazuhPass := os.Getenv("AISAC_WAZUH_API_PASSWORD")
+// applyWazuhIndexerEnvOverrides applies Wazuh Indexer (OpenSearch) environment
+// variables to any collector source with parser "wazuh_alerts" and type "api".
+func (c *AgentConfig) applyWazuhIndexerEnvOverrides() {
+	wazuhURL := os.Getenv("AISAC_WAZUH_INDEXER_URL")
+	wazuhUser := os.Getenv("AISAC_WAZUH_INDEXER_USER")
+	wazuhPass := os.Getenv("AISAC_WAZUH_INDEXER_PASSWORD")
+
+	// Backward compatibility: fall back to old env var names
+	if wazuhURL == "" {
+		wazuhURL = os.Getenv("AISAC_WAZUH_API_URL")
+	}
+	if wazuhUser == "" {
+		wazuhUser = os.Getenv("AISAC_WAZUH_API_USER")
+	}
+	if wazuhPass == "" {
+		wazuhPass = os.Getenv("AISAC_WAZUH_API_PASSWORD")
+	}
 
 	// Nothing to apply if no env vars are set
 	if wazuhURL == "" && wazuhUser == "" && wazuhPass == "" {
