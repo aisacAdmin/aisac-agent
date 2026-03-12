@@ -1,7 +1,9 @@
 package collector
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -14,6 +16,8 @@ const (
 	DefaultPollInterval = 30 * time.Second
 	// MaxPagesPerPoll caps the number of pages fetched in a single poll cycle.
 	MaxPagesPerPoll = 10
+	// defaultMaxPageSize is the default maximum page size for API sources.
+	defaultMaxPageSize = 500
 )
 
 // APIClient is the interface for API-based log sources.
@@ -57,7 +61,7 @@ func NewPoller(
 	}
 
 	pollInterval := DefaultPollInterval
-	pageSize := wazuhMaxPageSize
+	pageSize := defaultMaxPageSize
 
 	if source.API != nil {
 		if source.API.PollInterval > 0 {
@@ -202,5 +206,25 @@ func (p *Poller) poll(ctx context.Context, since time.Time) (time.Time, error) {
 	}
 
 	return latestTimestamp, nil
+}
+
+// WazuhAlertsResponse is the canonical internal response type for alert fetching.
+// API clients (OpenSearch, etc.) transform their native responses into this format.
+type WazuhAlertsResponse struct {
+	Data struct {
+		AffectedItems      []json.RawMessage `json:"affected_items"`
+		TotalAffectedItems int               `json:"total_affected_items"`
+	} `json:"data"`
+}
+
+// marshalAlertToRaw converts a json.RawMessage alert to a raw JSON string
+// suitable for the existing WazuhAlertParser.
+func marshalAlertToRaw(alert json.RawMessage) string {
+	// Compact the JSON to produce a single-line string (same as alerts.json format)
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, alert); err != nil {
+		return string(alert)
+	}
+	return buf.String()
 }
 
