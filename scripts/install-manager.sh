@@ -66,13 +66,13 @@ print_banner() {
     fi
 
     echo -e "${CYAN}"
-    echo "╔═══════════════════════════════════════════════════════════════╗"
-    echo "║                                                               ║"
-    echo "║           AISAC Manager Installer v2.0                        ║"
-    echo "║                                                               ║"
-    echo "║   Installs: Wazuh Manager + AISAC ${mode}$(printf '%*s' $((25 - ${#mode})) '')   ║"
-    echo "║                                                               ║"
-    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo "╔═════════════════════════════════════════════════════════════╗"
+    echo "║                                                             ║"
+    echo "║           AISAC Manager Installer v2.0                      ║"
+    echo "║                                                             ║"
+    echo "║   Installs: Wazuh Manager + AISAC ${mode}$(printf '%*s' $((25 - ${#mode})) '') ║"
+    echo "║                                                             ║"
+    echo "╚═════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
@@ -1262,8 +1262,17 @@ install_service() {
     # OpenSearch env vars only when Indexer is installed
     local wazuh_env_lines=""
     if [ "$NO_INDEXER" = false ]; then
+        # Detect Indexer bind address from opensearch.yml (falls back to localhost)
+        local indexer_host="localhost"
+        if [ -f /etc/wazuh-indexer/opensearch.yml ]; then
+            local configured_host
+            configured_host=$(grep -oP '^network\.host:\s*\K\S+' /etc/wazuh-indexer/opensearch.yml 2>/dev/null || true)
+            if [ -n "$configured_host" ]; then
+                indexer_host="$configured_host"
+            fi
+        fi
         wazuh_env_lines="# OpenSearch (Wazuh Indexer) credentials for alert collection
-Environment=AISAC_WAZUH_INDEXER_URL=https://localhost:9200
+Environment=AISAC_WAZUH_INDEXER_URL=https://${indexer_host}:9200
 Environment=AISAC_WAZUH_INDEXER_USER=admin
 Environment=AISAC_WAZUH_INDEXER_PASSWORD=${OPENSEARCH_PASSWORD:-CHANGE_ME}"
     fi
