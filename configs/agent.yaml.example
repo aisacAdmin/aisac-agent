@@ -116,16 +116,27 @@ collector:
 
   # Log sources to collect
   sources:
-    # Wazuh alerts via API (Manager only)
+    # Wazuh alerts — two options depending on whether Indexer is installed:
+    #
+    # Option A: File-based (--no-indexer, no OpenSearch needed)
+    # - name: wazuh_alerts
+    #   type: file
+    #   path: /var/ossec/logs/alerts/alerts.json
+    #   parser: wazuh_alerts
+    #   tags:
+    #     - security
+    #     - hids
+    #
+    # Option B: OpenSearch API (requires Wazuh Indexer installed)
     # Credentials MUST be set via environment variables:
-    #   AISAC_WAZUH_API_URL=https://localhost:55000
-    #   AISAC_WAZUH_API_USER=wazuh-wui
-    #   AISAC_WAZUH_API_PASSWORD=<your-password>
+    #   AISAC_WAZUH_INDEXER_URL=https://localhost:9200
+    #   AISAC_WAZUH_INDEXER_USER=admin
+    #   AISAC_WAZUH_INDEXER_PASSWORD=<your-password>
     # - name: wazuh_alerts
     #   type: api
     #   parser: wazuh_alerts
     #   tags:
-    #     - wazuh
+    #     - security
     #     - hids
     #   api:
     #     poll_interval: 30s
