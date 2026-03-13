@@ -1,20 +1,15 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-requested-with, x-api-key',
-  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS, PUT, DELETE',
-  'Access-Control-Max-Age': '86400',
-};
-
-function getCorsHeaders(_req: Request): Record<string, string> {
-  return corsHeaders;
-}
-
-function handleCorsPreflight(_req: Request): Response {
-  return new Response(null, { status: 204, headers: corsHeaders });
-}
+import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
+import {
+  encryptString,
+  decryptString,
+  generateX25519Keypair,
+  computeSharedSecret,
+  ratchetStep,
+  deriveTokenFromChain,
+} from '../_shared/crypto-utils.ts';
+import { safeLog, safeError } from '../_shared/logSanitization.ts';
 
 // Rate limiting: max heartbeats per minute per asset
 const RATE_LIMIT_MAX = 10;
@@ -52,6 +47,7 @@ interface HeartbeatPayload {
   asset_id: string;
   timestamp: string;
   agent_version: string;
+  dh_public_key?: string; // Agent's new ephemeral X25519 DH public key for ratchet step
   metrics?: {
     cpu_percent?: number;
     memory_percent?: number;
@@ -190,10 +186,10 @@ serve(async (req: Request) => {
       });
     }
 
-    // Get full asset data for status update
+    // Get full asset data for status update (include DRA fields for ratchet)
     const { data: asset, error: assetError } = await supabase
       .from('monitored_assets')
-      .select('id, tenant_id, criticality, ingestion_enabled, status')
+      .select('id, tenant_id, criticality, ingestion_enabled, status, mcp_root_key, mcp_chain_key, mcp_dh_private_key, mcp_agent_dh_public_key')
       .eq('id', payload.asset_id)
       .single();
 
@@ -276,35 +272,89 @@ serve(async (req: Request) => {
       }
     }
 
-    // 8. Calculate next heartbeat interval based on criticality
+    // 8. DH Ratchet step (if agent sends dh_public_key and DRA is initialized)
+    let responseDhPublicKey: string | undefined;
+    if (payload.dh_public_key && asset.mcp_root_key && asset.mcp_chain_key && asset.mcp_dh_private_key) {
+      const encryptionKey = Deno.env.get('ENCRYPTION_KEY');
+      if (encryptionKey) {
+        try {
+          // Decrypt current DRA state
+          const currentRootKey = await decryptString(asset.mcp_root_key, encryptionKey);
+          const currentDhPrivKey = await decryptString(asset.mcp_dh_private_key, encryptionKey);
+
+          if (currentRootKey && currentDhPrivKey) {
+            // Compute new shared secret: X25519(platform_current_priv, agent_new_pub)
+            const dhSharedSecret = computeSharedSecret(currentDhPrivKey, payload.dh_public_key);
+
+            // Ratchet step: new root key + chain key from old root + new DH shared
+            const ratcheted = await ratchetStep(currentRootKey, dhSharedSecret);
+
+            // Generate new platform ephemeral keypair
+            const newPlatformKeypair = generateX25519Keypair();
+            responseDhPublicKey = newPlatformKeypair.publicKey;
+
+            // Derive new MCP token from the new chain key
+            const newMcpToken = await deriveTokenFromChain(ratcheted.newChainKey);
+
+            // Store updated DRA state (encrypted)
+            const draUpdate: Record<string, unknown> = {
+              mcp_root_key: await encryptString(ratcheted.newRootKey, encryptionKey),
+              mcp_chain_key: await encryptString(ratcheted.newChainKey, encryptionKey),
+              mcp_dh_public_key: newPlatformKeypair.publicKey,
+              mcp_dh_private_key: await encryptString(newPlatformKeypair.privateKey, encryptionKey),
+              mcp_agent_dh_public_key: payload.dh_public_key,
+              mcp_auth_token: await encryptString(newMcpToken, encryptionKey),
+            };
+
+            const { error: draUpdateError } = await supabase
+              .from('monitored_assets')
+              .update(draUpdate)
+              .eq('id', asset.id);
+
+            if (draUpdateError) {
+              safeError('[Heartbeat] DRA ratchet DB update failed', draUpdateError);
+            } else {
+              safeLog(`[Heartbeat] DH ratchet step completed for asset ${asset.id}`);
+            }
+          }
+        } catch (draError) {
+          safeError('[Heartbeat] DH ratchet step failed', draError);
+          // Non-fatal: heartbeat still succeeds, ratchet will retry next heartbeat
+        }
+      }
+    }
+
+    // 9. Calculate next heartbeat interval based on criticality
     const criticality = asset.criticality || 'medium';
     const nextHeartbeatIn = HEARTBEAT_INTERVALS[criticality] || 120;
 
-    // 9. Build agent configuration
-    // The agent uses this config to know where to send logs and how often
-    // Usamos el proxy de CISEC para proteger el endpoint de Supabase
+    // 10. Build agent configuration
     const agentConfig = {
-      // Endpoint para enviar logs - proxy CISEC que reenvía a syslog-ingest
       log_endpoint: 'https://api.aisac.cisec.es/v1/logs',
-      // El agente debe usar X-API-Key para autenticar
-      auth_method: 'api_key', // Agent debe enviar X-API-Key header
-      log_batch_size: 100, // Max logs per batch
-      log_flush_interval: 30, // Seconds between log flushes
-      log_retention_hours: 24, // Keep logs locally if can't send
+      auth_method: 'api_key',
+      log_batch_size: 100,
+      log_flush_interval: 30,
+      log_retention_hours: 24,
       features: {
         log_forwarding: asset.ingestion_enabled,
         metrics_collection: true,
       },
     };
 
-    // 10. Return success response with config
+    // 11. Return success response with config (+ DH public key if ratchet occurred)
+    const responseBody: Record<string, unknown> = {
+      success: true,
+      next_heartbeat_in: nextHeartbeatIn,
+      server_time: now,
+      config: agentConfig,
+    };
+
+    if (responseDhPublicKey) {
+      responseBody.dh_public_key = responseDhPublicKey;
+    }
+
     return new Response(
-      JSON.stringify({
-        success: true,
-        next_heartbeat_in: nextHeartbeatIn,
-        server_time: now,
-        config: agentConfig,
-      }),
+      JSON.stringify(responseBody),
       { status: 200, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } }
     );
   } catch (error) {
