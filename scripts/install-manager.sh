@@ -918,11 +918,37 @@ install_mcp_server() {
         git clone "$MCP_REPO" "$MCP_INSTALL_DIR" 2>&1 | tail -3
     fi
 
-    # ── Generate MCP auth token ──
-    MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+    # ── Generate X25519 DH keypair for DRA token rotation ──
+    log_info "Generating X25519 DH keypair for MCP DRA..."
+    local dh_privkey_raw dh_pubkey_raw
+    dh_privkey_raw=$(openssl genpkey -algorithm X25519 2>/dev/null)
+    MCP_DH_PRIVATE_KEY=$(echo "$dh_privkey_raw" | openssl pkey -outform DER 2>/dev/null | tail -c 32 | base64 | tr '+/' '-_' | tr -d '=')
+    MCP_DH_PUBLIC_KEY=$(echo "$dh_privkey_raw" | openssl pkey -pubout -outform DER 2>/dev/null | tail -c 32 | base64 | tr '+/' '-_' | tr -d '=')
+
+    # Generate a backup seed for self-healing
+    MCP_SEED=$(openssl rand -hex 32)
+    MCP_ROTATION_EPOCH=$(date +%s)
+
+    # Save DH keys and seed to config dir
+    cat > "$CONFIG_DIR/mcp-dra-state.json" << DRAEOF
+{
+    "dh_public_key": "${MCP_DH_PUBLIC_KEY}",
+    "dh_priv_key": "${MCP_DH_PRIVATE_KEY}",
+    "seed": "${MCP_SEED}",
+    "rotation_epoch": ${MCP_ROTATION_EPOCH},
+    "root_key": "",
+    "chain_key": "",
+    "peer_dh_pub": ""
+}
+DRAEOF
+    chmod 600 "$CONFIG_DIR/mcp-dra-state.json"
+    log_success "DRA keypair generated and saved to $CONFIG_DIR/mcp-dra-state.json"
+
+    # Generate a temporary MCP auth token (will be replaced by DRA-derived token after registration)
+    MCP_AUTH_TOKEN=$(python3 -c "import secrets; print('wazuh_' + secrets.token_urlsafe(32))" 2>/dev/null)
     echo "$MCP_AUTH_TOKEN" > "$CONFIG_DIR/mcp-auth-token"
     chmod 600 "$CONFIG_DIR/mcp-auth-token"
-    log_success "MCP auth token generated and saved to $CONFIG_DIR/mcp-auth-token"
+    log_success "Initial MCP auth token generated"
 
     # ── Detect Wazuh API password (wazuh-wui) ──
     local wazuh_api_password=""
@@ -1070,13 +1096,18 @@ CSEOF
 )
     fi
 
-    # Build MCP fields if MCP enabled
+    # Build MCP fields if MCP enabled (DRA mode with DH public key)
     local mcp_fields=""
-    if [ "$MCP_ENABLED" = true ] && [ -n "${MCP_AUTH_TOKEN:-}" ]; then
+    if [ "$MCP_ENABLED" = true ] && [ -n "${MCP_DH_PUBLIC_KEY:-}" ]; then
         mcp_fields=$(cat <<MCPFEOF
 ,
-    "mcp_auth_token": "${MCP_AUTH_TOKEN}",
-    "mcp_server_url": "${MCP_SERVER_URL:-}"
+    "mcp_server": {
+        "auth_token": "${MCP_AUTH_TOKEN:-}",
+        "dh_public_key": "${MCP_DH_PUBLIC_KEY}",
+        "seed": "${MCP_SEED:-}",
+        "rotation_epoch": ${MCP_ROTATION_EPOCH:-0},
+        "url": "${MCP_SERVER_URL:-}"
+    }
 MCPFEOF
 )
     fi
@@ -1140,6 +1171,148 @@ EOF
     case "$http_code" in
         200|201)
             log_success "Agent registered successfully"
+
+            # Process DRA DH key exchange if platform returned its DH public key
+            local platform_dh_pub
+            platform_dh_pub=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('mcp_dh_public_key',''))" 2>/dev/null || true)
+
+            if [ -n "$platform_dh_pub" ] && [ -n "${MCP_DH_PRIVATE_KEY:-}" ]; then
+                log_info "Computing DRA shared secret..."
+
+                # Compute shared secret and initialize DRA using Python
+                local dra_result
+                dra_result=$(PLATFORM_DH_PUB="$platform_dh_pub" MCP_DH_PRIVATE_KEY="$MCP_DH_PRIVATE_KEY" python3 << 'PYEOF'
+import sys, json, hashlib, hmac, base64, struct
+
+def b64url_decode(s):
+    s = s.replace('-', '+').replace('_', '/')
+    s += '=' * (4 - len(s) % 4) if len(s) % 4 else ''
+    return base64.b64decode(s)
+
+def b64url_encode(data):
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+def hkdf_derive(ikm, salt, info, length=32):
+    """HKDF-SHA256 matching Web Crypto API."""
+    # Extract
+    if not salt:
+        salt = b'\x00' * 32
+    prk = hmac.new(salt if isinstance(salt, bytes) else salt.encode(), ikm, hashlib.sha256).digest()
+    # Expand
+    t = b''
+    okm = b''
+    for i in range(1, (length + 31) // 32 + 1):
+        t = hmac.new(prk, t + (info if isinstance(info, bytes) else info.encode()) + bytes([i]), hashlib.sha256).digest()
+        okm += t
+    return okm[:length]
+
+def x25519_scalar_mult(k, u):
+    """X25519 scalar multiplication (RFC 7748)."""
+    # Clamp scalar
+    k = bytearray(k)
+    k[0] &= 248
+    k[31] &= 127
+    k[31] |= 64
+
+    # Convert u to integer (little-endian)
+    u_int = int.from_bytes(u, 'little')
+    u_int &= (1 << 255) - 1  # mask MSB
+
+    p = 2**255 - 19
+    a24 = 121665
+
+    # Montgomery ladder
+    x_1 = u_int
+    x_2 = 1
+    z_2 = 0
+    x_3 = u_int
+    z_3 = 1
+    swap = 0
+
+    for t in range(254, -1, -1):
+        k_t = (int.from_bytes(bytes(k), 'little') >> t) & 1
+        swap ^= k_t
+        x_2, x_3 = (x_3, x_2) if swap else (x_2, x_3)
+        z_2, z_3 = (z_3, z_2) if swap else (z_2, z_3)
+        swap = k_t
+
+        A = (x_2 + z_2) % p
+        AA = (A * A) % p
+        B = (x_2 - z_2) % p
+        BB = (B * B) % p
+        E = (AA - BB) % p
+        C = (x_3 + z_3) % p
+        D = (x_3 - z_3) % p
+        DA = (D * A) % p
+        CB = (C * B) % p
+        x_3 = pow(DA + CB, 2, p)
+        z_3 = (x_1 * pow(DA - CB, 2, p)) % p
+        x_2 = (AA * BB) % p
+        z_2 = (E * (AA + a24 * E)) % p
+
+    x_2, x_3 = (x_3, x_2) if swap else (x_2, x_3)
+    z_2, z_3 = (z_3, z_2) if swap else (z_2, z_3)
+
+    result = (x_2 * pow(z_2, p - 2, p)) % p
+    return result.to_bytes(32, 'little')
+
+import os
+priv_b64 = os.environ.get('MCP_DH_PRIVATE_KEY', '')
+peer_pub_b64 = os.environ.get('PLATFORM_DH_PUB', '')
+
+priv = b64url_decode(priv_b64)
+peer_pub = b64url_decode(peer_pub_b64)
+
+# X25519 shared secret
+shared = x25519_scalar_mult(priv, peer_pub)
+
+# Initialize DRA (must match TypeScript exactly)
+root_key = hkdf_derive(shared, 'aisac-mcp-root', 'aisac-mcp-root-init', 32)
+chain_key = hkdf_derive(root_key, 'aisac-mcp-chain-salt', 'aisac-mcp-chain', 32)
+token_bytes = hkdf_derive(chain_key, 'aisac-mcp-salt', 'aisac-mcp-token', 32)
+mcp_token = 'wazuh_' + b64url_encode(token_bytes)
+
+print(json.dumps({
+    'root_key': b64url_encode(root_key),
+    'chain_key': b64url_encode(chain_key),
+    'mcp_token': mcp_token,
+}))
+PYEOF
+)
+                if [ -n "$dra_result" ]; then
+                    local dra_root_key dra_chain_key dra_mcp_token
+                    dra_root_key=$(echo "$dra_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['root_key'])")
+                    dra_chain_key=$(echo "$dra_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['chain_key'])")
+                    dra_mcp_token=$(echo "$dra_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['mcp_token'])")
+
+                    # Update DRA state file
+                    cat > "$CONFIG_DIR/mcp-dra-state.json" << DRAEOF2
+{
+    "root_key": "${dra_root_key}",
+    "chain_key": "${dra_chain_key}",
+    "dh_public_key": "${MCP_DH_PUBLIC_KEY}",
+    "dh_priv_key": "${MCP_DH_PRIVATE_KEY}",
+    "peer_dh_pub": "${platform_dh_pub}"
+}
+DRAEOF2
+                    chmod 600 "$CONFIG_DIR/mcp-dra-state.json"
+
+                    # Update MCP_API_KEY in .env with DRA-derived token
+                    if [ -d "$MCP_INSTALL_DIR" ] && [ -f "$MCP_INSTALL_DIR/.env" ]; then
+                        sed -i "s|^MCP_API_KEY=.*|MCP_API_KEY=${dra_mcp_token}|" "$MCP_INSTALL_DIR/.env"
+                        # Restart container to pick up new key
+                        (cd "$MCP_INSTALL_DIR" && sudo docker compose restart 2>/dev/null) || true
+                    fi
+
+                    # Update local token file
+                    echo "$dra_mcp_token" > "$CONFIG_DIR/mcp-auth-token"
+                    chmod 600 "$CONFIG_DIR/mcp-auth-token"
+
+                    log_success "DRA initialized: MCP token derived from DH key exchange"
+                else
+                    log_warning "DRA computation failed, using initial token"
+                fi
+            fi
             ;;
         *)
             log_warning "Registration returned HTTP ${http_code}. Continuing without registration."
