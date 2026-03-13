@@ -1,163 +1,581 @@
-// AISAC Agent Register Edge Function
-// Called by the install script to get tenant config before installing the agent.
-//
-// The client only needs to provide their asset API key. The function returns
-// everything the install script needs: tenant_id, Wazuh Manager config, and
-// AISAC Agent config.
-//
-// Expected headers:
-//   X-API-Key: aisac_xxxxxxxxxxxx
-//
-// Response:
-//   {
-//     "tenant_id": "uuid",
-//     "asset_id": "uuid",
-//     "asset_name": "string",
-//     "wazuh": {
-//       "manager_ip": "x.x.x.x",
-//       "manager_port": 1514,
-//       "agent_group": "tenant-uuid"
-//     },
-//     "aisac": {
-//       "heartbeat_url": "https://...",
-//       "ingest_url": "https://...",
-//       "api_key": "aisac_xxx"
-//     }
-//   }
+/**
+ * Agent Register Edge Function
+ *
+ * POST /v1/register
+ * Registers a new AISAC agent associated with an existing asset in the platform.
+ * Optionally registers Command Server credentials (encrypted at rest).
+ *
+ * Authentication:
+ *   - Header: X-API-Key: aisac_xxx (preferred)
+ *   - Header: Authorization: Bearer aisac_xxx (also supported)
+ *
+ * Request Body:
+ * {
+ *   "agent_id": "agent-hostname-abc123",  // Required: Unique agent ID
+ *   "asset_id": "uuid",                   // Required: Asset ID to associate
+ *   "hostname": "server-01",              // Required: Hostname
+ *   "os": "debian",                       // Optional: OS type
+ *   "os_version": "13",                   // Optional: OS version
+ *   "arch": "x86_64",                     // Optional: Architecture
+ *   "kernel": "6.1.0-18-amd64",          // Optional: Kernel version
+ *   "ip_address": "192.168.1.100",       // Optional: IP address
+ *   "version": "1.0.1",                  // Optional: Agent version
+ *   "capabilities": ["collector", "soar"] // Optional: Agent capabilities
+ *   "command_server": {                   // Optional: Command Server credentials
+ *     "api_token": "secret-token",        //   Required if command_server present
+ *     "url": "https://localhost:8443",    //   Optional: CS URL
+ *     "version": "2.1.0"                 //   Optional: CS version
+ *   },
+ *   "mcp_server": {                       // Optional: MCP Server credentials
+ *     "auth_token": "hex-token",          //   Required if mcp_server present
+ *     "url": "http://host:3000"           //   Optional: MCP Server URL
+ *   }
+ * }
+ *
+ * Response Codes:
+ *   200/201: Registration successful
+ *   400: Bad request (missing required fields)
+ *   401: Invalid API Key
+ *   403: No permission to register on this asset
+ *   404: Asset not found
+ *   409: Agent ID already registered (can continue)
+ *   500: Internal server error
+ */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
+import { encryptString } from '../_shared/crypto-utils.ts';
+import { safeLog, safeError } from '../_shared/logSanitization.ts';
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-api-key, content-type",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-};
+interface CommandServerInfo {
+  api_token: string;
+  url?: string;
+  version?: string;
+}
 
+interface McpServerInfo {
+  auth_token: string;
+  url?: string;
+}
+
+interface RegisterRequest {
+  agent_id: string;
+  asset_id: string;
+  hostname: string;
+  os?: string;
+  os_version?: string;
+  arch?: string;
+  kernel?: string;
+  ip_address?: string;
+  version?: string;
+  capabilities?: string[];
+  command_server?: CommandServerInfo;
+  mcp_server?: McpServerInfo;
+}
+
+interface AssetValidation {
+  asset_id: string;
+  tenant_id: string;
+  asset_name: string;
+  is_valid: boolean;
+}
+
+// ============================================================================
+// Rate Limiting (per IP, 30 req/min — tighter than webhook since registration is infrequent)
+// ============================================================================
+
+const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(ip: string): { allowed: boolean; remaining: number } {
+  const now = Date.now();
+  const limit = 30;
+  const windowMs = 60_000;
+
+  let bucket = rateLimitStore.get(ip);
+  if (!bucket || now > bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + windowMs };
+    rateLimitStore.set(ip, bucket);
+  }
+
+  bucket.count++;
+  const remaining = Math.max(0, limit - bucket.count);
+  return { allowed: bucket.count <= limit, remaining };
+}
+
+/**
+ * Extract API Key from request headers
+ * Supports both X-API-Key and Authorization: Bearer formats
+ */
 function extractApiKey(req: Request): string | null {
-  const xApiKey = req.headers.get("X-API-Key") || req.headers.get("x-api-key");
-  if (xApiKey) return xApiKey;
+  // Priority 1: X-API-Key header (per specification)
+  const xApiKey = req.headers.get('X-API-Key');
+  if (xApiKey && xApiKey.startsWith('aisac_')) {
+    return xApiKey;
+  }
 
-  const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
-  if (authHeader?.startsWith("Bearer ")) return authHeader.substring(7);
+  // Priority 2: Authorization: Bearer header (backwards compatibility)
+  const authHeader = req.headers.get('Authorization');
+  if (authHeader) {
+    const bearerMatch = authHeader.match(/^Bearer\s+(aisac_\S+)$/i);
+    if (bearerMatch) {
+      return bearerMatch[1];
+    }
+  }
 
   return null;
 }
 
-function isValidApiKey(apiKey: string): boolean {
-  const validAk = apiKey.startsWith("ak_") && /^ak_[0-9a-f]{63}$/.test(apiKey);
-  const validAisac = apiKey.startsWith("aisac_") && apiKey.length === 54;
-  return validAk || validAisac;
+/**
+ * Validate IP address format (IPv4)
+ */
+function isValidIPv4(ip: string): boolean {
+  const ipv4Regex =
+    /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+  return ipv4Regex.test(ip);
 }
 
-serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+/**
+ * Validate UUID format
+ */
+function isValidUUID(uuid: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(uuid);
+}
+
+serve(async req => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return handleCorsPreflight(req);
   }
 
-  if (req.method !== "GET") {
-    return new Response(
-      JSON.stringify({ error: "Method not allowed" }),
-      { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  // Only allow POST
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+    });
   }
 
   try {
-    // 1. Extract and validate API key
+    // ── Rate limiting ───────────────────────────────────────────────────
+    const clientIp =
+      req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+      req.headers.get('x-real-ip') ||
+      'unknown';
+
+    const rateCheck = checkRateLimit(clientIp);
+    if (!rateCheck.allowed) {
+      safeLog(`[Agent Register] Rate limit exceeded for IP: ${clientIp}`);
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded', retry_after_seconds: 60 }),
+        {
+          status: 429,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    safeLog('[Agent Register] Request received');
+
+    // 1. Extract API Key from headers
     const apiKey = extractApiKey(req);
+
     if (!apiKey) {
+      safeLog('[Agent Register] Missing or invalid API Key');
       return new Response(
-        JSON.stringify({ error: "Missing X-API-Key header" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error: 'API Key required',
+          message: 'Use header X-API-Key: aisac_xxx',
+        }),
+        {
+          status: 401,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
       );
     }
 
-    if (!isValidApiKey(apiKey)) {
+    // 2. Initialize Supabase with service role
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+    if (!supabaseUrl || !serviceRoleKey) {
+      safeError('[Agent Register] Missing Supabase configuration');
+      return new Response(JSON.stringify({ error: 'Server configuration error' }), {
+        status: 500,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+    // 3. Parse and validate request body
+    let body: RegisterRequest;
+    try {
+      body = await req.json();
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+        status: 400,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Validate required fields
+    const missingFields: string[] = [];
+    if (!body.agent_id) missingFields.push('agent_id');
+    if (!body.asset_id) missingFields.push('asset_id');
+    if (!body.hostname) missingFields.push('hostname');
+
+    if (missingFields.length > 0) {
       return new Response(
-        JSON.stringify({ error: "Invalid API key format" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error: 'Missing required fields',
+          missing: missingFields,
+        }),
+        {
+          status: 400,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
       );
     }
 
-    // 2. Initialize Supabase client
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-      console.error("Missing Supabase configuration");
+    // Validate asset_id format
+    if (!isValidUUID(body.asset_id)) {
       return new Response(
-        JSON.stringify({ error: "Server configuration error" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error: 'Invalid asset_id format',
+          message: 'asset_id must be a valid UUID',
+        }),
+        {
+          status: 400,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
       );
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // 3. Validate API key and get asset info
-    const { data: validation, error: validationError } = await supabase
-      .rpc("validate_asset_api_key", { p_api_key: apiKey });
-
-    if (validationError) {
-      console.error("API key validation error:", validationError.message);
-      return new Response(
-        JSON.stringify({ error: "API key validation failed" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // RPC may return an array (SETOF) or a single object depending on the definition
-    const validationResult = Array.isArray(validation) ? validation[0] : validation;
-
-    if (!validationResult || !validationResult.is_valid) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API key or asset not found" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const { asset_id, tenant_id, asset_name } = validationResult;
-
-    // 4. Get Wazuh Manager config from environment
-    const wazuhManagerIp = Deno.env.get("WAZUH_MANAGER_IP");
-    const wazuhManagerPort = parseInt(Deno.env.get("WAZUH_MANAGER_PORT") || "1514");
-
-    if (!wazuhManagerIp) {
-      console.error("Missing WAZUH_MANAGER_IP environment variable");
-      return new Response(
-        JSON.stringify({ error: "Wazuh Manager not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // 5. Get AISAC platform URLs from environment
-    const heartbeatUrl = Deno.env.get("AISAC_HEARTBEAT_URL") || `${supabaseUrl}/functions/v1/agent-heartbeat`;
-    const ingestUrl = Deno.env.get("AISAC_INGEST_URL") || `${supabaseUrl}/functions/v1/syslog-ingest`;
-
-    // 6. Return full config for the install script
-    return new Response(
-      JSON.stringify({
-        tenant_id,
-        asset_id,
-        asset_name,
-        wazuh: {
-          manager_ip: wazuhManagerIp,
-          manager_port: wazuhManagerPort,
-          agent_group: tenant_id, // group name = tenant_id for easy filtering
-        },
-        aisac: {
-          heartbeat_url: heartbeatUrl,
-          ingest_url: ingestUrl,
-          api_key: apiKey,
-        },
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    // 4. Validate API Key using existing function
+    safeLog('[Agent Register] Validating API Key...');
+    const { data: validation, error: validationError } = await supabase.rpc(
+      'validate_asset_api_key',
+      { p_api_key: apiKey }
     );
 
-  } catch (error) {
-    console.error("Register error:", error);
+    if (validationError) {
+      safeError('[Agent Register] Validation error', validationError);
+      return new Response(
+        JSON.stringify({
+          error: 'API Key validation failed',
+        }),
+        {
+          status: 500,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // RPC returns an array, get first item
+    const assetValidation = (validation as AssetValidation[])?.[0];
+
+    // Check if API key is valid at all
+    if (!assetValidation) {
+      safeLog('[Agent Register] Invalid API Key - no asset found');
+      return new Response(JSON.stringify({ error: 'Invalid API Key' }), {
+        status: 401,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Check if asset exists but is disabled
+    if (!assetValidation.is_valid) {
+      safeLog('[Agent Register] Asset is disabled or decommissioned');
+      return new Response(JSON.stringify({ error: 'Asset is disabled or decommissioned' }), {
+        status: 403,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 5. Verify asset_id matches the API key's asset
+    if (body.asset_id !== assetValidation.asset_id) {
+      // Check if the provided asset_id exists at all
+      const { data: assetExists } = await supabase
+        .from('monitored_assets')
+        .select('id')
+        .eq('id', body.asset_id)
+        .single();
+
+      if (!assetExists) {
+        safeLog(`[Agent Register] Asset not found: ${body.asset_id}`);
+        return new Response(
+          JSON.stringify({
+            error: 'Asset not found',
+            asset_id: body.asset_id,
+          }),
+          {
+            status: 404,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      // Asset exists but API key doesn't have permission
+      safeLog('[Agent Register] API Key does not match asset_id');
+      return new Response(
+        JSON.stringify({
+          error: 'No permission to register on this asset',
+          message: 'API Key does not match the provided asset_id',
+        }),
+        {
+          status: 403,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    safeLog(
+      `[Agent Register] API Key valid for asset: ${assetValidation.asset_name} (${assetValidation.asset_id})`
+    );
+
+    // 6. Check if agent_id is already registered
+    const { data: existingAgent } = await supabase
+      .from('monitored_assets')
+      .select('id, name, agent_id')
+      .eq('agent_id', body.agent_id)
+      .single();
+
+    if (existingAgent) {
+      // If same asset, this is a re-registration (allowed)
+      if (existingAgent.id === assetValidation.asset_id) {
+        safeLog(`[Agent Register] Re-registering agent ${body.agent_id} on same asset`);
+        // Continue to update
+      } else {
+        // Different asset - conflict
+        safeLog(`[Agent Register] Agent ID already registered to: ${existingAgent.name}`);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: 'Agent ID already registered',
+            message: `Agent ID is already registered to another asset: ${existingAgent.name}`,
+            existing_asset: existingAgent.name,
+          }),
+          {
+            status: 409,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+    }
+
+    // 7. Prepare update data
+    const updateData: Record<string, unknown> = {
+      agent_id: body.agent_id,
+      hostname: body.hostname,
+      agent_last_seen: new Date().toISOString(),
+      last_heartbeat: new Date().toISOString(),
+      status: 'online',
+      consecutive_failures: 0,
+    };
+
+    // Add optional fields if provided
+    if (body.os) updateData.os_type = body.os;
+    if (body.os_version) updateData.os_version = body.os_version;
+    if (body.arch) updateData.arch = body.arch;
+    if (body.kernel) updateData.kernel = body.kernel;
+    if (body.version) updateData.agent_version = body.version;
+
+    // Validate and add IP address
+    if (body.ip_address) {
+      if (isValidIPv4(body.ip_address)) {
+        updateData.ip_address = body.ip_address;
+      } else {
+        safeLog(`[Agent Register] Invalid IP address format: ${body.ip_address}`);
+      }
+    }
+
+    // Add capabilities if provided
+    if (body.capabilities && Array.isArray(body.capabilities)) {
+      // Filter to valid capability values
+      const validCapabilities = ['collector', 'soar', 'heartbeat'];
+      const filteredCapabilities = body.capabilities.filter(cap => validCapabilities.includes(cap));
+      updateData.capabilities = filteredCapabilities;
+    }
+
+    // Handle Command Server registration (optional)
+    let commandServerRegistered = false;
+    if (body.command_server) {
+      const cs = body.command_server;
+
+      // Validate api_token is present
+      if (!cs.api_token || typeof cs.api_token !== 'string' || cs.api_token.length < 1) {
+        return new Response(
+          JSON.stringify({
+            error: 'Invalid command_server.api_token',
+            message: 'api_token is required when command_server is provided',
+          }),
+          {
+            status: 400,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      // Validate token length (max 1000 chars)
+      if (cs.api_token.length > 1000) {
+        return new Response(
+          JSON.stringify({ error: 'command_server.api_token exceeds maximum length (1000)' }),
+          {
+            status: 400,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      // Encrypt the Command Server token with ENCRYPTION_KEY (AES-256-GCM)
+      const encryptionKey = Deno.env.get('ENCRYPTION_KEY');
+      if (!encryptionKey) {
+        safeError('[Agent Register] Missing ENCRYPTION_KEY for Command Server token encryption');
+        return new Response(
+          JSON.stringify({ error: 'Server configuration error: encryption not available' }),
+          {
+            status: 500,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      try {
+        const encryptedToken = await encryptString(cs.api_token, encryptionKey);
+        updateData.command_server_token = encryptedToken;
+        if (cs.url) updateData.command_server_url = cs.url;
+        if (cs.version) updateData.command_server_version = cs.version;
+        commandServerRegistered = true;
+        safeLog(
+          `[Agent Register] Command Server credentials encrypted for asset ${assetValidation.asset_id}`
+        );
+      } catch (encError) {
+        safeError('[Agent Register] Failed to encrypt Command Server token', encError);
+        return new Response(
+          JSON.stringify({ error: 'Failed to encrypt Command Server credentials' }),
+          {
+            status: 500,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+    }
+
+    // Handle MCP Server registration (optional)
+    let mcpServerRegistered = false;
+    if (body.mcp_server) {
+      const mcp = body.mcp_server;
+
+      // Validate auth_token is present
+      if (!mcp.auth_token || typeof mcp.auth_token !== 'string' || mcp.auth_token.length < 1) {
+        return new Response(
+          JSON.stringify({
+            error: 'Invalid mcp_server.auth_token',
+            message: 'auth_token is required when mcp_server is provided',
+          }),
+          {
+            status: 400,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      // Validate token length (max 1000 chars)
+      if (mcp.auth_token.length > 1000) {
+        return new Response(
+          JSON.stringify({ error: 'mcp_server.auth_token exceeds maximum length (1000)' }),
+          {
+            status: 400,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      // Encrypt the MCP auth token with ENCRYPTION_KEY (AES-256-GCM)
+      const encryptionKey = Deno.env.get('ENCRYPTION_KEY');
+      if (!encryptionKey) {
+        safeError('[Agent Register] Missing ENCRYPTION_KEY for MCP token encryption');
+        return new Response(
+          JSON.stringify({ error: 'Server configuration error: encryption not available' }),
+          {
+            status: 500,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      try {
+        const encryptedToken = await encryptString(mcp.auth_token, encryptionKey);
+        updateData.mcp_auth_token = encryptedToken;
+        if (mcp.url) updateData.mcp_server_url = mcp.url;
+        updateData.mcp_server_updated_at = new Date().toISOString();
+        mcpServerRegistered = true;
+        safeLog(
+          `[Agent Register] MCP Server credentials encrypted for asset ${assetValidation.asset_id}`
+        );
+      } catch (encError) {
+        safeError('[Agent Register] Failed to encrypt MCP token', encError);
+        return new Response(
+          JSON.stringify({ error: 'Failed to encrypt MCP Server credentials' }),
+          {
+            status: 500,
+            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+          }
+        );
+      }
+    }
+
+    // 8. Update monitored_assets with agent info
+    safeLog(`[Agent Register] Registering agent: ${body.agent_id}`);
+
+    const { error: updateError } = await supabase
+      .from('monitored_assets')
+      .update(updateData)
+      .eq('id', assetValidation.asset_id);
+
+    if (updateError) {
+      safeError('[Agent Register] Update failed', updateError);
+      return new Response(
+        JSON.stringify({
+          error: 'Failed to register agent',
+        }),
+        {
+          status: 500,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    const isNewRegistration = !existingAgent;
+    safeLog(
+      `[Agent Register] Successfully ${isNewRegistration ? 'registered' : 're-registered'} agent ${body.agent_id} for asset ${assetValidation.asset_name}`
+    );
+
     return new Response(
-      JSON.stringify({ error: "Internal server error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({
+        success: true,
+        agent_id: body.agent_id,
+        message: 'Agent registered successfully',
+        command_server_registered: commandServerRegistered,
+        mcp_server_registered: mcpServerRegistered,
+      }),
+      {
+        status: isNewRegistration ? 201 : 200,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      }
+    );
+  } catch (error) {
+    safeError('[Agent Register] Unhandled error', error);
+    return new Response(
+      JSON.stringify({
+        error: 'Internal server error',
+      }),
+      {
+        status: 500,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      }
     );
   }
 });
