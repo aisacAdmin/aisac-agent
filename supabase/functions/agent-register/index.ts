@@ -27,7 +27,10 @@
  *     "version": "2.1.0"                 //   Optional: CS version
  *   },
  *   "mcp_server": {                       // Optional: MCP Server credentials
- *     "auth_token": "hex-token",          //   Required if mcp_server present
+ *     "auth_token": "wazuh_xxx",          //   Current wazuh API key (legacy, optional with DH)
+ *     "dh_public_key": "base64url",       //   Agent's X25519 DH public key for DRA
+ *     "seed": "hex-seed",                 //   DRA seed backup (optional)
+ *     "rotation_epoch": 1773561600,       //   Unix epoch for rotation calc
  *     "url": "http://host:3000"           //   Optional: MCP Server URL
  *   }
  * }
@@ -45,7 +48,12 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
-import { encryptString } from '../_shared/crypto-utils.ts';
+import {
+  encryptString,
+  generateX25519Keypair,
+  computeSharedSecret,
+  initializeDRA,
+} from '../_shared/crypto-utils.ts';
 import { safeLog, safeError } from '../_shared/logSanitization.ts';
 
 interface CommandServerInfo {
@@ -55,7 +63,10 @@ interface CommandServerInfo {
 }
 
 interface McpServerInfo {
-  auth_token: string;
+  auth_token?: string;
+  dh_public_key?: string;
+  seed?: string;
+  rotation_epoch?: number;
   url?: string;
 }
 
@@ -465,15 +476,16 @@ serve(async req => {
 
     // Handle MCP Server registration (optional)
     let mcpServerRegistered = false;
+    let platformDhPublicKey: string | undefined;
     if (body.mcp_server) {
       const mcp = body.mcp_server;
 
-      // Validate auth_token is present
-      if (!mcp.auth_token || typeof mcp.auth_token !== 'string' || mcp.auth_token.length < 1) {
+      // Require either auth_token (legacy) or dh_public_key (DRA)
+      if (!mcp.auth_token && !mcp.dh_public_key) {
         return new Response(
           JSON.stringify({
-            error: 'Invalid mcp_server.auth_token',
-            message: 'auth_token is required when mcp_server is provided',
+            error: 'Invalid mcp_server',
+            message: 'Either auth_token or dh_public_key is required when mcp_server is provided',
           }),
           {
             status: 400,
@@ -482,18 +494,6 @@ serve(async req => {
         );
       }
 
-      // Validate token length (max 1000 chars)
-      if (mcp.auth_token.length > 1000) {
-        return new Response(
-          JSON.stringify({ error: 'mcp_server.auth_token exceeds maximum length (1000)' }),
-          {
-            status: 400,
-            headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
-          }
-        );
-      }
-
-      // Encrypt the MCP auth token with ENCRYPTION_KEY (AES-256-GCM)
       const encryptionKey = Deno.env.get('ENCRYPTION_KEY');
       if (!encryptionKey) {
         safeError('[Agent Register] Missing ENCRYPTION_KEY for MCP token encryption');
@@ -507,18 +507,74 @@ serve(async req => {
       }
 
       try {
-        const encryptedToken = await encryptString(mcp.auth_token, encryptionKey);
-        updateData.mcp_auth_token = encryptedToken;
         if (mcp.url) updateData.mcp_server_url = mcp.url;
         updateData.mcp_server_updated_at = new Date().toISOString();
+        updateData.mcp_rotation_epoch = mcp.rotation_epoch || Math.floor(Date.now() / 1000);
+
+        // Store seed backup if provided
+        if (mcp.seed) {
+          const encryptedSeed = await encryptString(mcp.seed, encryptionKey);
+          updateData.mcp_auth_seed = encryptedSeed;
+        }
+
+        if (mcp.dh_public_key) {
+          // ── DRA mode: X25519 DH key exchange ──────────────────────────
+          safeLog('[Agent Register] DRA mode: performing X25519 DH key exchange');
+
+          // Generate platform's X25519 keypair
+          const platformKeypair = generateX25519Keypair();
+          platformDhPublicKey = platformKeypair.publicKey;
+
+          // Compute shared secret: X25519(platform_priv, agent_pub)
+          const sharedSecret = computeSharedSecret(
+            platformKeypair.privateKey,
+            mcp.dh_public_key
+          );
+
+          // Initialize DRA: derive root_key, chain_key, initial mcp_token
+          const dra = await initializeDRA(sharedSecret);
+
+          // Store platform's DH keys (private encrypted, public plaintext)
+          updateData.mcp_dh_public_key = platformKeypair.publicKey;
+          updateData.mcp_dh_private_key = await encryptString(platformKeypair.privateKey, encryptionKey);
+          updateData.mcp_agent_dh_public_key = mcp.dh_public_key;
+
+          // Store DRA state (encrypted)
+          updateData.mcp_root_key = await encryptString(dra.rootKey, encryptionKey);
+          updateData.mcp_chain_key = await encryptString(dra.chainKey, encryptionKey);
+
+          // Store the derived initial token (encrypted)
+          updateData.mcp_auth_token = await encryptString(dra.mcpToken, encryptionKey);
+
+          safeLog(
+            `[Agent Register] DRA initialized for asset ${assetValidation.asset_id}, ` +
+            `initial token: ${dra.mcpToken.substring(0, 10)}...`
+          );
+        } else if (mcp.auth_token) {
+          // ── Legacy mode: direct token storage ─────────────────────────
+          if (mcp.auth_token.length > 1000) {
+            return new Response(
+              JSON.stringify({ error: 'mcp_server.auth_token exceeds maximum length (1000)' }),
+              {
+                status: 400,
+                headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+              }
+            );
+          }
+
+          const encryptedToken = await encryptString(mcp.auth_token, encryptionKey);
+          updateData.mcp_auth_token = encryptedToken;
+          safeLog('[Agent Register] MCP token stored (legacy mode)');
+        }
+
         mcpServerRegistered = true;
         safeLog(
-          `[Agent Register] MCP Server credentials encrypted for asset ${assetValidation.asset_id}`
+          `[Agent Register] MCP Server credentials stored for asset ${assetValidation.asset_id}`
         );
       } catch (encError) {
-        safeError('[Agent Register] Failed to encrypt MCP token', encError);
+        safeError('[Agent Register] Failed to process MCP credentials', encError);
         return new Response(
-          JSON.stringify({ error: 'Failed to encrypt MCP Server credentials' }),
+          JSON.stringify({ error: 'Failed to process MCP Server credentials' }),
           {
             status: 500,
             headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
@@ -553,14 +609,21 @@ serve(async req => {
       `[Agent Register] Successfully ${isNewRegistration ? 'registered' : 're-registered'} agent ${body.agent_id} for asset ${assetValidation.asset_name}`
     );
 
+    const responseBody: Record<string, unknown> = {
+      success: true,
+      agent_id: body.agent_id,
+      message: 'Agent registered successfully',
+      command_server_registered: commandServerRegistered,
+      mcp_server_registered: mcpServerRegistered,
+    };
+
+    // Return platform's DH public key so agent can complete DRA initialization
+    if (platformDhPublicKey) {
+      responseBody.mcp_dh_public_key = platformDhPublicKey;
+    }
+
     return new Response(
-      JSON.stringify({
-        success: true,
-        agent_id: body.agent_id,
-        message: 'Agent registered successfully',
-        command_server_registered: commandServerRegistered,
-        mcp_server_registered: mcpServerRegistered,
-      }),
+      JSON.stringify(responseBody),
       {
         status: isNewRegistration ? 201 : 200,
         headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
