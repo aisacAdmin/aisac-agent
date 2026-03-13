@@ -17,10 +17,15 @@
 #   - mTLS certificates
 #   - Command server for SOAR orchestration
 #
+# With --mcp flag, additionally installs:
+#   - Wazuh MCP Server (AI-powered security operations via MCP protocol)
+#   - Generates auth token for MCP access and registers it with the platform
+#
 # Usage:
 #   sudo bash install-manager.sh -k <API_KEY> -t <AUTH_TOKEN>
 #   sudo bash install-manager.sh -k <API_KEY> -t <AUTH_TOKEN> --agent
-#   sudo bash install-manager.sh -k <API_KEY> -t <AUTH_TOKEN> --agent --soar
+#   sudo bash install-manager.sh -k <API_KEY> -t <AUTH_TOKEN> --soar
+#   sudo bash install-manager.sh -k <API_KEY> -t <AUTH_TOKEN> --soar --mcp
 #
 # One-liner:
 #   curl -sSL https://raw.githubusercontent.com/CISECSL/aisac-agent/main/scripts/install-manager.sh -o install-manager.sh
@@ -64,6 +69,9 @@ print_banner() {
             mode="Agent + SOAR"
         fi
     fi
+    if [ "${MCP_ENABLED:-false}" = true ]; then
+        mode="${mode} + MCP"
+    fi
 
     echo -e "${CYAN}"
     echo "╔═════════════════════════════════════════════════════════════╗"
@@ -88,6 +96,7 @@ usage() {
     echo "  --no-dashboard     Install Indexer but skip Dashboard (saves ~200MB RAM)"
     echo "  --agent            Enable full asset capabilities (actions, safety, syslog)"
     echo "  --soar             Enable SOAR mode (mTLS + command server). Implies --agent"
+    echo "  --mcp              Install Wazuh MCP Server for AI-powered security operations"
     echo "  --uninstall        Uninstall everything (Wazuh Manager, AISAC Agent, data)"
     echo "  -h                 Show this help"
     echo ""
@@ -855,6 +864,170 @@ start_command_server() {
 }
 
 #==============================================================================
+# MCP Server Installation (Docker)
+#==============================================================================
+
+MCP_INSTALL_DIR="/opt/wazuh-mcp-server"
+MCP_REPO="https://github.com/gensecaihq/Wazuh-MCP-Server.git"
+
+install_mcp_server() {
+    log_info "Installing Wazuh MCP Server..."
+
+    # ── Ensure Docker is available ──
+    if ! command -v docker &>/dev/null; then
+        log_info "Docker not found. Installing Docker..."
+        if command -v apt-get &>/dev/null; then
+            curl -fsSL https://get.docker.com | bash 2>&1 | tail -5
+            systemctl enable docker
+            systemctl start docker
+        elif command -v yum &>/dev/null; then
+            curl -fsSL https://get.docker.com | bash 2>&1 | tail -5
+            systemctl enable docker
+            systemctl start docker
+        else
+            log_error "Cannot install Docker: unsupported package manager"
+            return 1
+        fi
+        log_success "Docker installed"
+    else
+        log_success "Docker $(docker --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) available"
+    fi
+
+    # Verify Docker Compose v2
+    if ! docker compose version &>/dev/null; then
+        log_error "Docker Compose v2 not available. Please install docker-compose-plugin."
+        return 1
+    fi
+
+    # ── Ensure git is available ──
+    if ! command -v git &>/dev/null; then
+        log_info "Installing git..."
+        if command -v apt-get &>/dev/null; then
+            apt-get install -y git 2>&1 | tail -2
+        elif command -v yum &>/dev/null; then
+            yum install -y git 2>&1 | tail -2
+        fi
+    fi
+
+    # ── Clone or update repository ──
+    if [ -d "$MCP_INSTALL_DIR" ]; then
+        log_info "Updating existing MCP Server repository..."
+        (cd "$MCP_INSTALL_DIR" && git pull --ff-only 2>&1 | tail -3) || true
+    else
+        log_info "Cloning Wazuh MCP Server..."
+        git clone "$MCP_REPO" "$MCP_INSTALL_DIR" 2>&1 | tail -3
+    fi
+
+    # ── Generate MCP auth token ──
+    MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+    echo "$MCP_AUTH_TOKEN" > "$CONFIG_DIR/mcp-auth-token"
+    chmod 600 "$CONFIG_DIR/mcp-auth-token"
+    log_success "MCP auth token generated and saved to $CONFIG_DIR/mcp-auth-token"
+
+    # ── Detect Wazuh API password (wazuh-wui) ──
+    local wazuh_api_password=""
+    if [ -f /tmp/wazuh-install.sh ] && [ -f /tmp/wazuh-install-files.tar ]; then
+        local passwords_output
+        passwords_output=$(bash /tmp/wazuh-install.sh -p 2>/dev/null) || true
+        if [ -n "$passwords_output" ]; then
+            wazuh_api_password=$(echo "$passwords_output" | grep -A1 "wazuh-wui" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+        fi
+    fi
+    if [ -z "$wazuh_api_password" ]; then
+        log_warning "Could not auto-detect Wazuh API password"
+        read -r -s -p "Enter Wazuh API password for user wazuh-wui (or press Enter to skip): " wazuh_api_password
+        echo ""
+    fi
+
+    # ── Detect Wazuh Indexer host ──
+    local indexer_host="localhost"
+    if [ -f /etc/wazuh-indexer/opensearch.yml ]; then
+        local configured_host
+        configured_host=$(grep -oP '^network\.host:\s*\K\S+' /etc/wazuh-indexer/opensearch.yml 2>/dev/null || true)
+        if [ -n "$configured_host" ]; then
+            indexer_host="$configured_host"
+        fi
+    fi
+
+    # ── Create .env for Docker container ──
+    cat > "$MCP_INSTALL_DIR/.env" << MCPEOF
+# Wazuh MCP Server Configuration
+# Generated by install-manager.sh on $(date)
+
+# === Wazuh Manager API ===
+WAZUH_HOST=https://${PRIVATE_IP}
+WAZUH_USER=wazuh-wui
+WAZUH_PASS=${wazuh_api_password:-CHANGE_ME}
+WAZUH_PORT=55000
+
+# === MCP Server ===
+MCP_HOST=0.0.0.0
+MCP_PORT=3000
+
+# === Authentication ===
+AUTH_MODE=bearer
+AUTH_SECRET_KEY=${MCP_AUTH_TOKEN}
+MCP_API_KEY=${MCP_AUTH_TOKEN}
+TOKEN_LIFETIME_HOURS=8760
+
+# === Wazuh Indexer (OpenSearch) ===
+WAZUH_INDEXER_HOST=${indexer_host}
+WAZUH_INDEXER_PORT=9200
+WAZUH_INDEXER_USER=admin
+WAZUH_INDEXER_PASS=${OPENSEARCH_PASSWORD:-CHANGE_ME}
+
+# === SSL ===
+WAZUH_VERIFY_SSL=false
+
+# === CORS ===
+ALLOWED_ORIGINS=https://claude.ai,https://*.anthropic.com,http://localhost:*
+
+# === Logging ===
+LOG_LEVEL=INFO
+MCPEOF
+
+    chmod 600 "$MCP_INSTALL_DIR/.env"
+    log_success "MCP Server .env configured"
+
+    # ── Build and start with Docker Compose ──
+    log_info "Building MCP Server Docker image..."
+    (cd "$MCP_INSTALL_DIR" && docker compose build --pull 2>&1 | tail -5)
+    log_success "MCP Server Docker image built"
+
+    log_info "Starting MCP Server container..."
+    (cd "$MCP_INSTALL_DIR" && docker compose up -d 2>&1 | tail -3)
+
+    # Wait for healthy
+    log_info "Waiting for MCP Server to be healthy..."
+    local attempt=1
+    local max_attempts=20
+    while [ $attempt -le $max_attempts ]; do
+        if curl -sf --max-time 3 http://localhost:3000/health 2>/dev/null | grep -q "healthy"; then
+            break
+        fi
+        sleep 3
+        attempt=$((attempt + 1))
+    done
+
+    if [ $attempt -gt $max_attempts ]; then
+        log_warning "MCP Server health check timed out. Check: docker compose -f $MCP_INSTALL_DIR/compose.yml logs"
+    else
+        log_success "MCP Server is running and healthy on port 3000"
+    fi
+
+    # Detect public IP for MCP URL
+    MCP_SERVER_URL=""
+    local public_ip
+    public_ip=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+    if [ -n "$public_ip" ]; then
+        MCP_SERVER_URL="http://${public_ip}:3000/mcp"
+    else
+        MCP_SERVER_URL="http://${PRIVATE_IP}:3000/mcp"
+    fi
+    log_info "MCP Server URL: ${MCP_SERVER_URL}"
+}
+
+#==============================================================================
 # Agent registration with platform
 #==============================================================================
 
@@ -897,6 +1070,17 @@ CSEOF
 )
     fi
 
+    # Build MCP fields if MCP enabled
+    local mcp_fields=""
+    if [ "$MCP_ENABLED" = true ] && [ -n "${MCP_AUTH_TOKEN:-}" ]; then
+        mcp_fields=$(cat <<MCPFEOF
+,
+    "mcp_auth_token": "${MCP_AUTH_TOKEN}",
+    "mcp_server_url": "${MCP_SERVER_URL:-}"
+MCPFEOF
+)
+    fi
+
     # Build integration_config (Manager monitors itself as agent 000)
     local integration_config=""
     local manager_name
@@ -927,7 +1111,7 @@ ICEOF
         "ip_address": "${ip_address}",
         "version": "1.0.5",
         "capabilities": ${capabilities}
-    }${cs_fields}${integration_config}
+    }${cs_fields}${mcp_fields}${integration_config}
 }
 EOF
 )
@@ -1333,6 +1517,7 @@ main() {
     NO_DASHBOARD=false
     AGENT_MODE=false
     SOAR_ENABLED=false
+    MCP_ENABLED=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1344,6 +1529,7 @@ main() {
             --no-dashboard) NO_DASHBOARD=true; shift ;;
             --agent) AGENT_MODE=true; shift ;;
             --soar) SOAR_ENABLED=true; AGENT_MODE=true; shift ;;
+            --mcp) MCP_ENABLED=true; shift ;;
             --uninstall)
                 if [ "$EUID" -ne 0 ]; then
                     log_error "Must be run as root"
@@ -1383,6 +1569,9 @@ main() {
     fi
     if [ "$SOAR_ENABLED" = true ]; then
         total_steps=7  # +SOAR setup
+    fi
+    if [ "$MCP_ENABLED" = true ]; then
+        total_steps=$((total_steps + 1))  # +MCP setup
     fi
     local step=0
 
@@ -1486,6 +1675,20 @@ main() {
 
     install_service
 
+    # ── Step: Install MCP Server (if --mcp) ──
+    MCP_AUTH_TOKEN=""
+    MCP_SERVER_URL=""
+
+    if [ "$MCP_ENABLED" = true ]; then
+        step=$((step + 1))
+        echo ""
+        echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+        echo -e "${CYAN}  Step ${step}/${total_steps}: Installing Wazuh MCP Server (Docker)              ${NC}"
+        echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        install_mcp_server
+    fi
+
     # ── Step: Register agent (if --agent) ──
     if [ "$AGENT_MODE" = true ]; then
         step=$((step + 1))
@@ -1528,6 +1731,25 @@ main() {
     if [ "$AGENT_MODE" = true ]; then
         echo ""
         echo -e "  ${CYAN}Agent Mode:${NC}      Enabled (actions, safety, registration)"
+    fi
+
+    if [ "$MCP_ENABLED" = true ]; then
+        echo ""
+        echo -e "  ${CYAN}MCP Server:${NC}"
+        echo -e "    Status:          docker compose -f ${MCP_INSTALL_DIR}/compose.yml ps"
+        echo -e "    Logs:            docker compose -f ${MCP_INSTALL_DIR}/compose.yml logs -f"
+        echo -e "    Health:          curl http://localhost:3000/health"
+        echo -e "    URL:             ${MCP_SERVER_URL:-http://localhost:3000/mcp}"
+        echo -e "    Auth Token:      ${CONFIG_DIR}/mcp-auth-token"
+        echo ""
+        echo -e "  ${YELLOW}Claude Code config (~/.claude.json):${NC}"
+        echo -e "    \"mcpServers\": {"
+        echo -e "      \"wazuh\": {"
+        echo -e "        \"type\": \"http\","
+        echo -e "        \"url\": \"${MCP_SERVER_URL:-http://localhost:3000/mcp}\","
+        echo -e "        \"headers\": { \"Authorization\": \"Bearer ${MCP_AUTH_TOKEN:-<token>}\" }"
+        echo -e "      }"
+        echo -e "    }"
     fi
 
     echo ""
