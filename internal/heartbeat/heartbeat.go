@@ -75,6 +75,7 @@ type Payload struct {
 	Timestamp    time.Time `json:"timestamp"`
 	AgentVersion string    `json:"agent_version"`
 	Metrics      Metrics   `json:"metrics"`
+	DHPublicKey  string    `json:"dh_public_key,omitempty"` // Ephemeral X25519 DH public key for ratchet
 }
 
 // Metrics contains system metrics.
@@ -90,6 +91,7 @@ type Response struct {
 	Success         bool   `json:"success"`
 	NextHeartbeatIn int    `json:"next_heartbeat_in"` // seconds
 	Message         string `json:"message,omitempty"`
+	DHPublicKey     string `json:"dh_public_key,omitempty"` // Platform's new DH public key (ratchet response)
 }
 
 // Client handles heartbeat communication with the AISAC platform.
@@ -113,6 +115,9 @@ type Client struct {
 	consecutiveFailures int
 	recoveryTriggered   bool
 	recoveryCallback    RecoveryCallback
+
+	// DRA state for MCP token rotation
+	draState *DRAState
 }
 
 // NewClient creates a new heartbeat client.
@@ -128,7 +133,7 @@ func NewClient(cfg Config, version string, logger zerolog.Logger) *Client {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
-	return &Client{
+	c := &Client{
 		cfg:    cfg,
 		logger: logger.With().Str("component", "heartbeat").Logger(),
 		httpClient: &http.Client{
@@ -138,6 +143,14 @@ func NewClient(cfg Config, version string, logger zerolog.Logger) *Client {
 		version:  version,
 		interval: cfg.Interval,
 	}
+
+	// Try to load DRA state for MCP token rotation
+	if state, err := LoadDRAState(); err == nil {
+		c.draState = state
+		c.logger.Info().Msg("DRA state loaded for MCP token rotation")
+	}
+
+	return c
 }
 
 // SetRecoveryCallback sets the callback function for auto-recovery.
@@ -204,6 +217,18 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 		Metrics:      metrics,
 	}
 
+	// Generate ephemeral DH keypair for ratchet step if DRA is initialized
+	var ephemeralPrivB64 string
+	if c.draState != nil {
+		pubB64, privB64, err := GenerateX25519Keypair()
+		if err != nil {
+			c.logger.Warn().Err(err).Msg("Failed to generate ephemeral DH keypair")
+		} else {
+			payload.DHPublicKey = pubB64
+			ephemeralPrivB64 = privB64
+		}
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		c.logger.Error().Err(err).Msg("Failed to marshal heartbeat payload")
@@ -265,6 +290,15 @@ func (c *Client) sendHeartbeat(ctx context.Context) {
 		c.logger.Warn().Err(err).Msg("Failed to parse heartbeat response")
 		c.recordError(ctx, err)
 		return
+	}
+
+	// Process DH ratchet response
+	if response.DHPublicKey != "" && ephemeralPrivB64 != "" && c.draState != nil {
+		if err := c.processRatchetResponse(response.DHPublicKey, ephemeralPrivB64); err != nil {
+			c.logger.Warn().Err(err).Msg("DH ratchet step failed, will retry next heartbeat")
+		} else {
+			c.logger.Info().Msg("DH ratchet step completed successfully")
+		}
 	}
 
 	// Update interval from server response
@@ -352,6 +386,42 @@ func (c *Client) Stats() Stats {
 		ConsecutiveFailures: c.consecutiveFailures,
 		RecoveryTriggered:   c.recoveryTriggered,
 	}
+}
+
+// processRatchetResponse performs the agent-side DH ratchet step.
+func (c *Client) processRatchetResponse(platformPubB64, ourPrivB64 string) error {
+	// Compute new shared secret: X25519(our_ephemeral_priv, platform_new_pub)
+	sharedSecret, err := ComputeSharedSecret(ourPrivB64, platformPubB64)
+	if err != nil {
+		return fmt.Errorf("compute shared secret: %w", err)
+	}
+
+	// Ratchet step: derive new root key + chain key
+	newRootKey, newChainKey, err := RatchetStep(c.draState.RootKey, sharedSecret)
+	if err != nil {
+		return fmt.Errorf("ratchet step: %w", err)
+	}
+
+	// Generate new keypair for next heartbeat
+	newPubB64, newPrivB64, err := GenerateX25519Keypair()
+	if err != nil {
+		return fmt.Errorf("generate next keypair: %w", err)
+	}
+
+	// Update DRA state
+	c.draState.RootKey = newRootKey
+	c.draState.ChainKey = newChainKey
+	c.draState.DHPublicKey = newPubB64
+	c.draState.DHPrivKey = newPrivB64
+	c.draState.PeerDHPub = platformPubB64
+
+	// Persist state
+	if err := SaveDRAState(c.draState); err != nil {
+		c.logger.Warn().Err(err).Msg("Failed to persist DRA state")
+		// Non-fatal: in-memory state is updated
+	}
+
+	return nil
 }
 
 // Stats contains heartbeat statistics.
