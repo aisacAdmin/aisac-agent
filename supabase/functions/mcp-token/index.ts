@@ -3,8 +3,8 @@
  *
  * POST /functions/v1/mcp-token
  * Returns a fresh JWT for accessing an asset's Wazuh MCP Server.
- * Derives the current API key from the stored seed + epoch using HMAC-SHA256
- * (DRA-inspired deterministic rotation), then exchanges it for a JWT.
+ * Derives the current MCP API key from the DRA chain_key (HKDF-SHA256),
+ * then exchanges it for a JWT via the MCP Server's /auth/token endpoint.
  *
  * Authentication:
  *   - Authorization: Bearer <supabase-user-jwt>
@@ -27,54 +27,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
-import { decryptString } from '../_shared/crypto-utils.ts';
+import { decryptString, deriveTokenFromChain } from '../_shared/crypto-utils.ts';
 import { safeLog, safeError } from '../_shared/logSanitization.ts';
-
-// ============================================================================
-// Token Derivation (DRA-inspired)
-// ============================================================================
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToB64Url(bytes: Uint8Array): string {
-  const binString = Array.from(bytes, byte => String.fromCharCode(byte)).join('');
-  const b64 = btoa(binString);
-  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-/**
- * Derive the current MCP API key from seed + epoch using HMAC-SHA256.
- * token_n = HMAC-SHA256(seed, "mcp-token-rotation:" + rotation_count)
- * rotation_count = floor((now - epoch) / 86400)
- */
-async function deriveCurrentToken(
-  seedHex: string,
-  epochSeconds: number,
-  rotationOffset: number = 0
-): Promise<string> {
-  const rotationCount = Math.max(
-    0,
-    Math.floor((Date.now() / 1000 - epochSeconds) / 86400) + rotationOffset
-  );
-  const seedBytes = hexToBytes(seedHex);
-  const data = new TextEncoder().encode(`mcp-token-rotation:${rotationCount}`);
-
-  const key = await crypto.subtle.importKey(
-    'raw',
-    seedBytes,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
-  return `wazuh_${bytesToB64Url(sig)}`;
-}
 
 // ============================================================================
 // Rate Limiting
@@ -193,7 +147,7 @@ serve(async req => {
     const serviceClient = createClient(supabaseUrl, serviceRoleKey);
     const { data: asset, error: fetchError } = await serviceClient
       .from('monitored_assets')
-      .select('mcp_auth_seed, mcp_rotation_epoch, mcp_server_url')
+      .select('mcp_chain_key, mcp_auth_token, mcp_server_url')
       .eq('id', body.asset_id)
       .single();
 
@@ -205,7 +159,7 @@ serve(async req => {
       });
     }
 
-    if (!asset.mcp_auth_seed || !asset.mcp_rotation_epoch || !asset.mcp_server_url) {
+    if (!asset.mcp_server_url) {
       return new Response(
         JSON.stringify({ error: 'MCP Server not configured for this asset' }),
         {
@@ -215,41 +169,47 @@ serve(async req => {
       );
     }
 
-    // Decrypt seed
-    const seed = await decryptString(asset.mcp_auth_seed, encryptionKey);
-    if (!seed) {
-      safeError('[MCP Token] Failed to decrypt seed');
-      return new Response(JSON.stringify({ error: 'Failed to decrypt MCP credentials' }), {
-        status: 500,
-        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
-      });
+    // Derive current MCP token from chain_key (preferred) or use stored auth_token (legacy)
+    let currentToken: string | null = null;
+
+    if (asset.mcp_chain_key) {
+      // DRA mode: derive token from chain key
+      const chainKey = await decryptString(asset.mcp_chain_key, encryptionKey);
+      if (chainKey) {
+        currentToken = await deriveTokenFromChain(chainKey);
+        safeLog('[MCP Token] Token derived from DRA chain_key');
+      }
     }
 
-    // Derive current token and exchange for JWT
+    if (!currentToken && asset.mcp_auth_token) {
+      // Fallback: use stored encrypted token directly
+      currentToken = await decryptString(asset.mcp_auth_token, encryptionKey);
+      safeLog('[MCP Token] Using stored mcp_auth_token (legacy/fallback)');
+    }
+
+    if (!currentToken) {
+      safeError('[MCP Token] No MCP credentials available');
+      return new Response(
+        JSON.stringify({ error: 'MCP credentials not configured for this asset' }),
+        {
+          status: 404,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Exchange MCP API key for JWT
     const mcpBaseUrl = asset.mcp_server_url.replace(/\/mcp\/?$/, '');
-    const currentToken = await deriveCurrentToken(seed, asset.mcp_rotation_epoch);
+    safeLog(`[MCP Token] Exchanging token for JWT on ${mcpBaseUrl}`);
 
-    safeLog(`[MCP Token] Exchanging derived token for JWT on ${mcpBaseUrl}`);
-
-    let tokenResponse = await fetch(`${mcpBaseUrl}/auth/token`, {
+    const tokenResponse = await fetch(`${mcpBaseUrl}/auth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: currentToken }),
     });
 
-    // Grace period: if 401, try previous rotation count
-    if (tokenResponse.status === 401) {
-      safeLog('[MCP Token] Current token rejected, trying previous rotation (grace period)');
-      const previousToken = await deriveCurrentToken(seed, asset.mcp_rotation_epoch, -1);
-      tokenResponse = await fetch(`${mcpBaseUrl}/auth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: previousToken }),
-      });
-    }
-
     if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text().catch(() => 'Unknown error');
+      await tokenResponse.text().catch(() => '');
       safeError(`[MCP Token] MCP Server rejected token exchange: ${tokenResponse.status}`);
       return new Response(
         JSON.stringify({
@@ -264,8 +224,6 @@ serve(async req => {
     }
 
     const tokenData = await tokenResponse.json();
-
-    // Calculate expiration
     const expiresAt = new Date(Date.now() + (tokenData.expires_in || 86400) * 1000).toISOString();
 
     safeLog(`[MCP Token] JWT obtained for asset ${body.asset_id}`);
