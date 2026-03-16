@@ -97,6 +97,7 @@ usage() {
     echo "  --agent            Enable full asset capabilities (actions, safety, syslog)"
     echo "  --soar             Enable SOAR mode (mTLS + command server). Implies --agent"
     echo "  --mcp              Install Wazuh MCP Server for AI-powered security operations"
+    echo "  -o|--overwrite     Overwrite existing Wazuh installation"
     echo "  --uninstall        Uninstall everything (Wazuh Manager, AISAC Agent, data)"
     echo "  -h                 Show this help"
     echo ""
@@ -278,6 +279,13 @@ install_wazuh_manager() {
         return 0
     fi
 
+    # Build overwrite flag for Wazuh installer
+    local OVERWRITE_FLAG=""
+    if [ "$OVERWRITE" = true ]; then
+        OVERWRITE_FLAG="-o"
+        log_info "Overwrite mode enabled — will reinstall existing Wazuh components"
+    fi
+
     log_info "Downloading Wazuh ${WAZUH_VERSION} installer..."
     cd /tmp
     curl -sO "https://packages.wazuh.com/${WAZUH_VERSION}/wazuh-install.sh"
@@ -310,7 +318,7 @@ EOCFG
     if [ "$NO_INDEXER" = true ]; then
         # Lightweight mode: only Wazuh Manager (no Indexer/Dashboard)
         log_info "Installing Wazuh Manager only (no Indexer/Dashboard)..."
-        bash /tmp/wazuh-install.sh --wazuh-server "${WAZUH_SERVER_NAME}" ${IGNORE_REQUIREMENTS} -o 2>&1 | tail -10
+        bash /tmp/wazuh-install.sh --wazuh-server "${WAZUH_SERVER_NAME}" ${IGNORE_REQUIREMENTS} ${OVERWRITE_FLAG} 2>&1 | tail -10
 
         # Disable indexer-connector warnings (no indexer to connect to)
         if [ -f /var/ossec/etc/ossec.conf ]; then
@@ -319,17 +327,17 @@ EOCFG
     else
         # Indexer + Server (Dashboard is optional)
         log_info "Installing Wazuh Indexer..."
-        bash /tmp/wazuh-install.sh --wazuh-indexer wazuh-indexer ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
+        bash /tmp/wazuh-install.sh --wazuh-indexer wazuh-indexer ${IGNORE_REQUIREMENTS} ${OVERWRITE_FLAG} 2>&1 | tail -5
 
         log_info "Starting Wazuh cluster..."
         bash /tmp/wazuh-install.sh --start-cluster ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
 
         log_info "Installing Wazuh Server..."
-        bash /tmp/wazuh-install.sh --wazuh-server "${WAZUH_SERVER_NAME}" ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
+        bash /tmp/wazuh-install.sh --wazuh-server "${WAZUH_SERVER_NAME}" ${IGNORE_REQUIREMENTS} ${OVERWRITE_FLAG} 2>&1 | tail -5
 
         if [ "$NO_DASHBOARD" = false ]; then
             log_info "Installing Wazuh Dashboard..."
-            bash /tmp/wazuh-install.sh --wazuh-dashboard wazuh-dashboard ${IGNORE_REQUIREMENTS} 2>&1 | tail -5
+            bash /tmp/wazuh-install.sh --wazuh-dashboard wazuh-dashboard ${IGNORE_REQUIREMENTS} ${OVERWRITE_FLAG} 2>&1 | tail -5
         else
             log_info "Skipping Wazuh Dashboard (--no-dashboard)"
         fi
@@ -1090,8 +1098,10 @@ register_agent() {
     if [ "$SOAR_ENABLED" = true ] && [ -n "${SERVER_API_TOKEN:-}" ]; then
         cs_fields=$(cat <<CSEOF
 ,
-    "command_server_token": "${SERVER_API_TOKEN}",
-    "command_server_url": "${PUBLIC_SERVER_URL:-}"
+    "command_server": {
+        "api_token": "${SERVER_API_TOKEN}",
+        "url": "${PUBLIC_SERVER_URL:-}"
+    }
 CSEOF
 )
     fi
@@ -1112,37 +1122,21 @@ MCPFEOF
 )
     fi
 
-    # Build integration_config (Manager monitors itself as agent 000)
-    local integration_config=""
-    local manager_name
-    manager_name=$(hostname | tr '[:upper:]' '[:lower:]')
-    integration_config=$(cat <<ICEOF
-,
-    "integration_config": {
-        "wazuh_agent_name": "${manager_name}",
-        "wazuh_agent_id": "000"
-    }
-ICEOF
-)
-
     local register_url
-    register_url="$(echo "$HEARTBEAT_URL" | sed -E 's|/functions/v1/.*||')/functions/v1/agent-webhook"
+    register_url="$(echo "$HEARTBEAT_URL" | sed -E 's|/functions/v1/.*||')/functions/v1/agent-register"
 
     local payload=$(cat <<EOF
 {
-    "event": "agent_registered",
+    "agent_id": "${AGENT_ID}",
     "asset_id": "${ASSET_ID}",
-    "agent_info": {
-        "agent_id": "${AGENT_ID}",
-        "hostname": "${hostname_val}",
-        "os": "${os_info}",
-        "os_version": "${os_version}",
-        "arch": "${arch}",
-        "kernel": "${kernel}",
-        "ip_address": "${ip_address}",
-        "version": "1.0.5",
-        "capabilities": ${capabilities}
-    }${cs_fields}${mcp_fields}${integration_config}
+    "hostname": "${hostname_val}",
+    "os": "${os_info}",
+    "os_version": "${os_version}",
+    "arch": "${arch}",
+    "kernel": "${kernel}",
+    "ip_address": "${ip_address}",
+    "version": "1.0.5",
+    "capabilities": ${capabilities}${cs_fields}${mcp_fields}
 }
 EOF
 )
@@ -1688,6 +1682,7 @@ main() {
     IGNORE_REQUIREMENTS=""
     NO_INDEXER=false
     NO_DASHBOARD=false
+    OVERWRITE=false
     AGENT_MODE=false
     SOAR_ENABLED=false
     MCP_ENABLED=false
@@ -1700,6 +1695,7 @@ main() {
             -i) IGNORE_REQUIREMENTS="-i"; shift ;;
             --no-indexer) NO_INDEXER=true; NO_DASHBOARD=true; shift ;;
             --no-dashboard) NO_DASHBOARD=true; shift ;;
+            -o|--overwrite) OVERWRITE=true; shift ;;
             --agent) AGENT_MODE=true; shift ;;
             --soar) SOAR_ENABLED=true; AGENT_MODE=true; shift ;;
             --mcp) MCP_ENABLED=true; shift ;;
