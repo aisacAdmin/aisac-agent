@@ -2937,7 +2937,8 @@ serve(async (req: Request) => {
             for (const alert of filterResult.passed) {
               let targetAssetId: string = assetId!; // default: collector
 
-              if (alert.wazuh_agent_name) {
+              // agent.id "000" = the manager itself; skip resolution and use collector asset
+              if (alert.wazuh_agent_name && alert.wazuh_agent_id !== '000') {
                 const resolved = await resolveWazuhAgentAsset(
                   supabase,
                   validatedTenantId,
