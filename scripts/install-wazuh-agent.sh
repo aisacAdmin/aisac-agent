@@ -207,10 +207,11 @@ main() {
     call_register "$api_key" "$register_url" "$auth_token"
 
     # 2. Parse Wazuh config from saved response (read file directly to avoid bash variable issues)
-    local manager_port agent_group asset_name
+    local manager_port agent_group asset_name asset_id agent_name
     manager_port=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.manager_port")
     agent_group=$(json_get_file "$REGISTER_OUTPUT" ".wazuh.agent_group")
     asset_name=$(json_get_file "$REGISTER_OUTPUT" ".asset_name")
+    asset_id=$(json_get_file "$REGISTER_OUTPUT" ".asset_id")
 
     # Manager IP comes from CLI parameter (mandatory)
     local manager_ip="$manager_ip_override"
@@ -222,11 +223,20 @@ main() {
 
     [ -z "$asset_name" ] && asset_name=$(hostname)
 
+    # Build Wazuh agent name as hostname_asset-id so syslog-ingest can
+    # extract the asset UUID (split by '_', take last element) and route alerts cross-tenant.
+    if [ -n "$asset_id" ]; then
+        agent_name="${asset_name}_${asset_id}"
+    else
+        log_warn "No asset_id in register response, using asset_name only"
+        agent_name="$asset_name"
+    fi
+
     # 3. Detect distro
     detect_distro
 
     # 4. Install Wazuh Agent
-    install_wazuh_agent "$manager_ip" "${manager_port:-1514}" "$agent_group" "$asset_name"
+    install_wazuh_agent "$manager_ip" "${manager_port:-1514}" "$agent_group" "$agent_name"
 
     # 5. Extract Wazuh agent ID and save to register JSON for install-aisac-agent.sh
     local wazuh_agent_id=""
@@ -238,7 +248,7 @@ main() {
     if command -v jq &>/dev/null; then
         local tmp_json
         tmp_json=$(jq \
-            --arg name "$asset_name" \
+            --arg name "$agent_name" \
             --arg id "$wazuh_agent_id" \
             '.wazuh.agent_name = $name | .wazuh.agent_id = $id' \
             "$REGISTER_OUTPUT")
@@ -248,14 +258,14 @@ main() {
 import json
 with open('$REGISTER_OUTPUT') as f:
     data = json.load(f)
-data.setdefault('wazuh', {})['agent_name'] = '$asset_name'
+data.setdefault('wazuh', {})['agent_name'] = '$agent_name'
 data.setdefault('wazuh', {})['agent_id'] = '$wazuh_agent_id'
 with open('$REGISTER_OUTPUT', 'w') as f:
     json.dump(data, f, indent=2)
 "
     fi
 
-    log_info "  Wazuh Agent Name: ${asset_name}"
+    log_info "  Wazuh Agent Name: ${agent_name}"
     log_info "  Wazuh Agent ID:   ${wazuh_agent_id:-unknown}"
     log_success "Wazuh Agent installed → Manager: ${manager_ip} | Group: ${agent_group}"
 }
