@@ -52,6 +52,7 @@ INSTALL_DIR="/opt/aisac"
 CONFIG_DIR="/etc/aisac"
 DATA_DIR="/var/lib/aisac"
 LOG_DIR="/var/log/aisac"
+WAZUH_PASSWORDS_OUTPUT=""
 SERVICE_NAME="aisac-agent"
 BINARY_NAME="aisac-agent"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -377,10 +378,9 @@ extract_opensearch_password() {
     # Method 1: Extract from wazuh-install-files.tar using wazuh-install.sh -p
     if [ -f /tmp/wazuh-install.sh ] && [ -f /tmp/wazuh-install-files.tar ]; then
         log_info "Extracting OpenSearch admin password from install files..."
-        local passwords_output
-        passwords_output=$(bash /tmp/wazuh-install.sh -p 2>/dev/null) || true
-        if [ -n "$passwords_output" ]; then
-            OPENSEARCH_PASSWORD=$(echo "$passwords_output" | grep -A1 "indexer" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+        WAZUH_PASSWORDS_OUTPUT=$(bash /tmp/wazuh-install.sh -p 2>/dev/null) || true
+        if [ -n "$WAZUH_PASSWORDS_OUTPUT" ]; then
+            OPENSEARCH_PASSWORD=$(echo "$WAZUH_PASSWORDS_OUTPUT" | grep -A1 "indexer" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
         fi
     fi
 
@@ -978,13 +978,33 @@ DRAEOF
 
     # ── Detect Wazuh API password (wazuh-wui) ──
     local wazuh_api_password=""
-    if [ -f /tmp/wazuh-install.sh ] && [ -f /tmp/wazuh-install-files.tar ]; then
+
+    # Method 1: Reuse cached output from Step 2
+    if [ -n "$WAZUH_PASSWORDS_OUTPUT" ]; then
+        wazuh_api_password=$(echo "$WAZUH_PASSWORDS_OUTPUT" | grep -A1 "wazuh-wui" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+    fi
+
+    # Method 2: Try wazuh-install.sh -p again
+    if [ -z "$wazuh_api_password" ] && [ -f /tmp/wazuh-install.sh ] && [ -f /tmp/wazuh-install-files.tar ]; then
         local passwords_output
         passwords_output=$(bash /tmp/wazuh-install.sh -p 2>/dev/null) || true
         if [ -n "$passwords_output" ]; then
             wazuh_api_password=$(echo "$passwords_output" | grep -A1 "wazuh-wui" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
         fi
     fi
+
+    # Method 3: Try extracting from tar directly
+    if [ -z "$wazuh_api_password" ] && [ -f /tmp/wazuh-install-files.tar ]; then
+        local tmp_extract="/tmp/wazuh-pw-extract"
+        mkdir -p "$tmp_extract"
+        tar -xf /tmp/wazuh-install-files.tar -C "$tmp_extract" 2>/dev/null || true
+        if [ -f "$tmp_extract/wazuh-install-files/wazuh-passwords.txt" ]; then
+            wazuh_api_password=$(grep -A1 "wazuh-wui" "$tmp_extract/wazuh-install-files/wazuh-passwords.txt" | grep -oP "password:\s*'\K[^']+|password:\s*\K\S+" | head -1) || true
+        fi
+        rm -rf "$tmp_extract"
+    fi
+
+    # Method 4: Ask user
     if [ -z "$wazuh_api_password" ]; then
         log_warning "Could not auto-detect Wazuh API password"
         read -r -s -p "Enter Wazuh API password for user wazuh-wui (or press Enter to skip): " wazuh_api_password
