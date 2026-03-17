@@ -980,9 +980,36 @@ async function resolveWazuhAgentAsset(
   }
 
   try {
-    // Priority 1: Exact match on integration_config->>'wazuh_agent_name'
-    // This field is set by the Wazuh install script via PATCH /agent-register
-    const { data: asset } = await supabase
+    // Priority 1: Extract asset UUID from agent name (format: hostname_<uuid>)
+    // The install script names Wazuh agents as "hostname_asset-id", allowing
+    // cross-tenant resolution without filtering by tenant_id.
+    const lastUnderscore = agentName.lastIndexOf('_');
+    const possibleUuid = lastUnderscore >= 0 ? agentName.substring(lastUnderscore + 1) : '';
+    const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(possibleUuid);
+
+    if (isValidUuid) {
+      const { data: asset } = await supabase
+        .from('monitored_assets')
+        .select('id, siem_config')
+        .eq('id', possibleUuid)
+        .neq('status', 'decommissioned')
+        .maybeSingle();
+
+      if (asset) {
+        const siemEnabled = (asset.siem_config as SIEMConfig | null)?.enabled === true;
+        agentAssetCache.set(cacheKey, {
+          assetId: asset.id,
+          siemEnabled,
+          expiresAt: Date.now() + AGENT_CACHE_TTL_MS,
+        });
+        safeLog(`[ROUTE] Resolved agent "${agentName}" -> asset ${asset.id} via embedded UUID`);
+        return { assetId: asset.id, siemEnabled };
+      }
+    }
+
+    // Priority 2: Exact match on integration_config->>'wazuh_agent_name'
+    // Fallback for agents registered before the hostname_uuid naming convention
+    const { data: configAsset } = await supabase
       .from('monitored_assets')
       .select('id, siem_config')
       .eq('tenant_id', tenantId)
@@ -991,18 +1018,18 @@ async function resolveWazuhAgentAsset(
       .limit(1)
       .maybeSingle();
 
-    if (asset) {
-      const siemEnabled = (asset.siem_config as SIEMConfig | null)?.enabled === true;
+    if (configAsset) {
+      const siemEnabled = (configAsset.siem_config as SIEMConfig | null)?.enabled === true;
       agentAssetCache.set(cacheKey, {
-        assetId: asset.id,
+        assetId: configAsset.id,
         siemEnabled,
         expiresAt: Date.now() + AGENT_CACHE_TTL_MS,
       });
-      safeLog(`[ROUTE] Resolved agent "${agentName}" -> asset ${asset.id} via integration_config`);
-      return { assetId: asset.id, siemEnabled };
+      safeLog(`[ROUTE] Resolved agent "${agentName}" -> asset ${configAsset.id} via integration_config`);
+      return { assetId: configAsset.id, siemEnabled };
     }
 
-    // Priority 2: DB function find_asset_by_identifier (ILIKE on hostname/name + IP)
+    // Priority 3: DB function find_asset_by_identifier (ILIKE on hostname/name + IP)
     // Covers assets not yet updated by install script, or manual configurations
     if (agentIp || agentName) {
       const { data: rpcAssetId } = await supabase.rpc('find_asset_by_identifier', {
