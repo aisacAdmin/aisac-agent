@@ -1875,6 +1875,12 @@ main() {
     echo ""
     fetch_aisac_config
 
+    # Set Wazuh Manager agent name to hostname_asset-id so syslog-ingest can
+    # extract the asset UUID and route alerts cross-tenant (same convention as agents).
+    # NOTE: Manager alerts (agent.id = "000") use the system hostname as agent.name.
+    # We cannot change the hostname, so syslog-ingest handles this case:
+    # when agent.id = "000", it uses the collector's asset_id directly.
+
     # ── Step: Create tenant group ──
     step=$((step + 1))
     echo ""
