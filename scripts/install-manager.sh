@@ -157,6 +157,12 @@ uninstall() {
         rm -f "/etc/systemd/system/${svc}.service"
     done
 
+    # Stop and remove Cloudflare Tunnel
+    if systemctl is-active --quiet cloudflared 2>/dev/null; then
+        log_info "Removing Cloudflare Tunnel..."
+        cloudflared service uninstall 2>/dev/null || true
+    fi
+
     # Kill lingering processes
     pkill -x "aisac-agent" 2>/dev/null || true
     pkill -x "aisac-server" 2>/dev/null || true
@@ -423,7 +429,12 @@ fetch_aisac_config() {
         auth_header="Authorization: Bearer ${AUTH_TOKEN}"
     fi
 
-    response=$(curl -s -w "\n%{http_code}" -X GET "${REGISTER_URL}" \
+    local config_url="${REGISTER_URL}"
+    if [ "${MCP_ENABLED:-false}" = true ]; then
+        config_url="${REGISTER_URL}?mcp=true"
+    fi
+
+    response=$(curl -s -w "\n%{http_code}" -X GET "${config_url}" \
         -H "X-API-Key: ${API_KEY}" \
         -H "Content-Type: application/json" \
         ${auth_header:+-H "$auth_header"} 2>/dev/null)
@@ -479,12 +490,19 @@ fetch_aisac_config() {
         log_warning "Ingest URL was empty, derived: ${INGEST_URL}"
     fi
 
+    # Extract Cloudflare Tunnel config (if provisioned)
+    CF_TUNNEL_TOKEN=$(json_extract "$body" ".tunnel.token" 2>/dev/null || echo "")
+    CF_TUNNEL_HOSTNAME=$(json_extract "$body" ".tunnel.hostname" 2>/dev/null || echo "")
+
     log_success "Config received"
     log_info "  Asset ID:      ${ASSET_ID}"
     log_info "  Asset Name:    ${ASSET_NAME}"
     log_info "  Tenant ID:     ${TENANT_ID}"
     log_info "  Heartbeat URL: ${HEARTBEAT_URL}"
     log_info "  Ingest URL:    ${INGEST_URL}"
+    if [ -n "${CF_TUNNEL_HOSTNAME}" ]; then
+        log_info "  Tunnel:        ${CF_TUNNEL_HOSTNAME}"
+    fi
 }
 
 #==============================================================================
@@ -995,7 +1013,7 @@ WAZUH_PASS=${wazuh_api_password:-CHANGE_ME}
 WAZUH_PORT=55000
 
 # === MCP Server ===
-MCP_HOST=0.0.0.0
+MCP_HOST=$([ -n "${CF_TUNNEL_HOSTNAME:-}" ] && echo "127.0.0.1" || echo "0.0.0.0")
 MCP_PORT=3000
 
 # === Authentication ===
@@ -1049,16 +1067,81 @@ MCPEOF
         log_success "MCP Server is running and healthy on port 3000"
     fi
 
-    # Detect public IP for MCP URL
+    # Detect MCP URL — use Cloudflare Tunnel if available, otherwise public IP
     MCP_SERVER_URL=""
-    local public_ip
-    public_ip=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
-    if [ -n "$public_ip" ]; then
-        MCP_SERVER_URL="http://${public_ip}:3000/mcp"
+    if [ -n "${CF_TUNNEL_HOSTNAME:-}" ]; then
+        MCP_SERVER_URL="https://${CF_TUNNEL_HOSTNAME}/mcp"
+        log_info "MCP Server URL (Cloudflare Tunnel): ${MCP_SERVER_URL}"
     else
-        MCP_SERVER_URL="http://${PRIVATE_IP}:3000/mcp"
+        local public_ip
+        public_ip=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+        if [ -n "$public_ip" ]; then
+            MCP_SERVER_URL="http://${public_ip}:3000/mcp"
+        else
+            MCP_SERVER_URL="http://${PRIVATE_IP}:3000/mcp"
+        fi
+        log_warning "MCP Server URL (no tunnel, HTTP): ${MCP_SERVER_URL}"
     fi
-    log_info "MCP Server URL: ${MCP_SERVER_URL}"
+}
+
+#==============================================================================
+# Install Cloudflare Tunnel (cloudflared)
+#==============================================================================
+
+install_cloudflared() {
+    log_info "Installing Cloudflare Tunnel..."
+
+    # 1. Download cloudflared binary
+    if command -v cloudflared &>/dev/null; then
+        log_success "cloudflared already installed: $(cloudflared --version 2>/dev/null | head -1)"
+    else
+        log_info "Downloading cloudflared..."
+        local arch
+        arch=$(uname -m)
+        case "$arch" in
+            x86_64|amd64) arch="amd64" ;;
+            aarch64|arm64) arch="arm64" ;;
+            *) log_error "Unsupported architecture: $arch"; return 1 ;;
+        esac
+        curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" \
+            -o /usr/local/bin/cloudflared
+        chmod +x /usr/local/bin/cloudflared
+        log_success "cloudflared installed: $(cloudflared --version 2>/dev/null | head -1)"
+    fi
+
+    # 2. Stop existing cloudflared service if running (reinstall case)
+    if systemctl is-active --quiet cloudflared 2>/dev/null; then
+        log_info "Stopping existing cloudflared service..."
+        cloudflared service uninstall 2>/dev/null || true
+    fi
+
+    # 3. Install as systemd service with tunnel token
+    log_info "Configuring cloudflared service..."
+    cloudflared service install "${CF_TUNNEL_TOKEN}"
+    systemctl enable cloudflared 2>/dev/null
+    systemctl start cloudflared
+
+    # 4. Verify tunnel is connected
+    log_info "Waiting for Cloudflare Tunnel to connect..."
+    local attempt=1
+    local max_attempts=20
+    while [ $attempt -le $max_attempts ]; do
+        if curl -sf --max-time 5 "https://${CF_TUNNEL_HOSTNAME}/health" 2>/dev/null | grep -qi "healthy\|ok\|running"; then
+            log_success "Cloudflare Tunnel is active: https://${CF_TUNNEL_HOSTNAME}"
+            return 0
+        fi
+        sleep 3
+        attempt=$((attempt + 1))
+    done
+
+    # Tunnel might still be initializing — check cloudflared status instead
+    if systemctl is-active --quiet cloudflared 2>/dev/null; then
+        log_warning "Tunnel health check timed out, but cloudflared service is running"
+        log_info "DNS propagation may take a few minutes. URL: https://${CF_TUNNEL_HOSTNAME}"
+    else
+        log_error "cloudflared service is not running. Check: journalctl -u cloudflared"
+        return 1
+    fi
 }
 
 #==============================================================================
@@ -1856,6 +1939,12 @@ main() {
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
         echo ""
         install_mcp_server
+
+        # Install Cloudflare Tunnel if provisioned
+        if [ -n "${CF_TUNNEL_TOKEN:-}" ] && [ -n "${CF_TUNNEL_HOSTNAME:-}" ]; then
+            log_info "Setting up Cloudflare Tunnel for MCP Server..."
+            install_cloudflared
+        fi
     fi
 
     # ── Step: Register agent (if --agent) ──
@@ -1910,6 +1999,10 @@ main() {
         echo -e "    Health:          curl http://localhost:3000/health"
         echo -e "    URL:             ${MCP_SERVER_URL:-http://localhost:3000/mcp}"
         echo -e "    Auth Token:      ${CONFIG_DIR}/mcp-auth-token"
+        if [ -n "${CF_TUNNEL_HOSTNAME:-}" ]; then
+            echo -e "    Tunnel:          systemctl status cloudflared"
+            echo -e "    Tunnel URL:      https://${CF_TUNNEL_HOSTNAME}"
+        fi
         echo ""
         echo -e "  ${YELLOW}Claude Code config (~/.claude.json):${NC}"
         echo -e "    \"mcpServers\": {"
