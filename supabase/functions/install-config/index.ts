@@ -20,7 +20,7 @@
 //     "aisac": { ... },
 //     "tunnel": {                          // only if ?mcp=true
 //       "token": "<cloudflared-token>",
-//       "hostname": "slug-uuid.mcp.cisec.es"
+//       "hostname": "mcp-slug-uuid.aisac.tech"
 //     }
 //   }
 
@@ -86,8 +86,8 @@ async function provisionTunnel(
   cfZoneId: string,
 ): Promise<TunnelResult> {
   const slug = slugify(assetName);
-  const hostname = `${slug}-${assetId}.mcp.cisec.es`;
-  const tunnelName = `${slug}-${assetId}`;
+  const hostname = `mcp-${slug}-${assetId.split("-")[0]}.aisac.tech`;
+  const tunnelName = `mcp-${slug}-${assetId.split("-")[0]}`;
 
   // 1. Generate a random tunnel secret (32 bytes, base64)
   const secretBytes = new Uint8Array(32);
@@ -111,14 +111,30 @@ async function provisionTunnel(
   );
 
   const createData = await createRes.json();
-  console.log("[tunnel] Create tunnel response:", JSON.stringify(createData.success), createData.errors);
-  if (!createData.success) {
-    const errMsg = createData.errors?.[0]?.message || JSON.stringify(createData.errors);
-    throw new Error(`Failed to create tunnel: ${errMsg}`);
-  }
+  let tunnelId: string;
 
-  const tunnelId = createData.result.id;
-  console.log("[tunnel] Tunnel created:", tunnelId);
+  if (!createData.success) {
+    // If tunnel already exists, find it by name
+    const errMsg = createData.errors?.[0]?.message || "";
+    if (errMsg.includes("already have a tunnel with this name")) {
+      console.log("[tunnel] Tunnel already exists, looking up by name:", tunnelName);
+      const listRes = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${cfAccountId}/cfd_tunnel?name=${encodeURIComponent(tunnelName)}&is_deleted=false`,
+        { headers: { Authorization: `Bearer ${cfApiToken}` } }
+      );
+      const listData = await listRes.json();
+      if (!listData.success || !listData.result?.length) {
+        throw new Error(`Tunnel exists but could not be found by name: ${tunnelName}`);
+      }
+      tunnelId = listData.result[0].id;
+      console.log("[tunnel] Found existing tunnel:", tunnelId);
+    } else {
+      throw new Error(`Failed to create tunnel: ${errMsg || JSON.stringify(createData.errors)}`);
+    }
+  } else {
+    tunnelId = createData.result.id;
+    console.log("[tunnel] Tunnel created:", tunnelId);
+  }
 
   // 3. Configure the tunnel's public hostname (ingress rule)
   const configRes = await fetch(
@@ -163,7 +179,7 @@ async function provisionTunnel(
       },
       body: JSON.stringify({
         type: "CNAME",
-        name: `${slug}-${assetId}.mcp`,
+        name: `mcp-${slug}-${assetId.split("-")[0]}`,
         content: `${tunnelId}.cfargotunnel.com`,
         proxied: true,
       }),
@@ -299,6 +315,7 @@ serve(async (req: Request) => {
       const cfZoneId = Deno.env.get("CF_ZONE_ID");
       const encryptionKey = Deno.env.get("ENCRYPTION_KEY");
 
+      console.log("[install-config] CF env check:", { cfAccountId: !!cfAccountId, cfApiToken: !!cfApiToken, cfZoneId: !!cfZoneId, encryptionKey: !!encryptionKey });
       if (cfAccountId && cfApiToken && cfZoneId && encryptionKey) {
         // Check if tunnel already exists for this asset
         const { data: asset } = await supabase
@@ -380,6 +397,7 @@ serve(async (req: Request) => {
         hostname: tunnelData.hostname,
       };
     }
+
 
     return new Response(
       JSON.stringify(response),
