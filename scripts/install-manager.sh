@@ -1397,8 +1397,10 @@ DRAEOF2
                     # Update MCP_API_KEY in .env with DRA-derived token
                     if [ -d "$MCP_INSTALL_DIR" ] && [ -f "$MCP_INSTALL_DIR/.env" ]; then
                         sed -i "s|^MCP_API_KEY=.*|MCP_API_KEY=${dra_mcp_token}|" "$MCP_INSTALL_DIR/.env"
-                        # Restart container to pick up new key
-                        (cd "$MCP_INSTALL_DIR" && sudo docker compose restart 2>/dev/null) || true
+                        sed -i "s|^AUTH_SECRET_KEY=.*|AUTH_SECRET_KEY=${dra_mcp_token}|" "$MCP_INSTALL_DIR/.env"
+                        # Recreate container to pick up new .env (restart does not reload .env)
+                        log_info "Restarting MCP Server with DRA-derived token..."
+                        (cd "$MCP_INSTALL_DIR" && docker compose up -d --force-recreate 2>&1 | tail -3) || true
                     fi
 
                     # Update local token file
