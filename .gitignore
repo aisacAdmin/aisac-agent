@@ -58,3 +58,6 @@ logs/
 # Temporary files
 tmp/
 temp/
+
+# Supabase local
+supabase/.temp/
