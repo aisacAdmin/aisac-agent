@@ -964,7 +964,9 @@ install_mcp_server() {
     "rotation_epoch": ${MCP_ROTATION_EPOCH},
     "root_key": "",
     "chain_key": "",
-    "peer_dh_pub": ""
+    "peer_dh_pub": "",
+    "asset_id": "${ASSET_ID}",
+    "tenant_id": "${TENANT_ID}"
 }
 DRAEOF
     chmod 600 "$CONFIG_DIR/mcp-dra-state.json"
@@ -1278,7 +1280,7 @@ EOF
 
                 # Compute shared secret and initialize DRA using Python
                 local dra_result
-                dra_result=$(PLATFORM_DH_PUB="$platform_dh_pub" MCP_DH_PRIVATE_KEY="$MCP_DH_PRIVATE_KEY" python3 << 'PYEOF'
+                dra_result=$(PLATFORM_DH_PUB="$platform_dh_pub" MCP_DH_PRIVATE_KEY="$MCP_DH_PRIVATE_KEY" DRA_ASSET_ID="$ASSET_ID" DRA_TENANT_ID="$TENANT_ID" python3 << 'PYEOF'
 import sys, json, hashlib, hmac, base64, struct
 
 def b64url_decode(s):
@@ -1356,6 +1358,8 @@ def x25519_scalar_mult(k, u):
 import os
 priv_b64 = os.environ.get('MCP_DH_PRIVATE_KEY', '')
 peer_pub_b64 = os.environ.get('PLATFORM_DH_PUB', '')
+asset_id = os.environ.get('DRA_ASSET_ID', '')
+tenant_id = os.environ.get('DRA_TENANT_ID', '')
 
 priv = b64url_decode(priv_b64)
 peer_pub = b64url_decode(peer_pub_b64)
@@ -1363,10 +1367,11 @@ peer_pub = b64url_decode(peer_pub_b64)
 # X25519 shared secret
 shared = x25519_scalar_mult(priv, peer_pub)
 
-# Initialize DRA (must match TypeScript exactly)
-root_key = hkdf_derive(shared, 'aisac-mcp-root', 'aisac-mcp-root-init', 32)
-chain_key = hkdf_derive(root_key, 'aisac-mcp-chain-salt', 'aisac-mcp-chain', 32)
-token_bytes = hkdf_derive(chain_key, 'aisac-mcp-salt', 'aisac-mcp-token', 32)
+# Initialize DRA with domain separation (must match TypeScript exactly)
+# salt includes asset_id, info includes tenant_id
+root_key = hkdf_derive(shared, f'aisac-mcp-root:{asset_id}', f'aisac-mcp-root-init:{tenant_id}', 32)
+chain_key = hkdf_derive(root_key, f'aisac-mcp-chain-salt:{asset_id}', f'aisac-mcp-chain:{tenant_id}', 32)
+token_bytes = hkdf_derive(chain_key, f'aisac-mcp-salt:{asset_id}', f'aisac-mcp-token:{tenant_id}', 32)
 mcp_token = 'wazuh_' + b64url_encode(token_bytes)
 
 print(json.dumps({
@@ -1389,7 +1394,9 @@ PYEOF
     "chain_key": "${dra_chain_key}",
     "dh_public_key": "${MCP_DH_PUBLIC_KEY}",
     "dh_priv_key": "${MCP_DH_PRIVATE_KEY}",
-    "peer_dh_pub": "${platform_dh_pub}"
+    "peer_dh_pub": "${platform_dh_pub}",
+    "asset_id": "${ASSET_ID}",
+    "tenant_id": "${TENANT_ID}"
 }
 DRAEOF2
                     chmod 600 "$CONFIG_DIR/mcp-dra-state.json"

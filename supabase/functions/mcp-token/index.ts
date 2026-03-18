@@ -147,7 +147,7 @@ serve(async req => {
     const serviceClient = createClient(supabaseUrl, serviceRoleKey);
     const { data: asset, error: fetchError } = await serviceClient
       .from('monitored_assets')
-      .select('mcp_chain_key, mcp_auth_token, mcp_server_url')
+      .select('mcp_chain_key, mcp_auth_token, mcp_server_url, tenant_id')
       .eq('id', body.asset_id)
       .single();
 
@@ -176,7 +176,10 @@ serve(async req => {
       // DRA mode: derive token from chain key
       const chainKey = await decryptString(asset.mcp_chain_key, encryptionKey);
       if (chainKey) {
-        currentToken = await deriveTokenFromChain(chainKey);
+        currentToken = await deriveTokenFromChain(chainKey, {
+          assetId: body.asset_id!,
+          tenantId: asset.tenant_id,
+        });
         safeLog('[MCP Token] Token derived from DRA chain_key');
       }
     }

@@ -21,6 +21,13 @@ import (
 	"path/filepath"
 )
 
+// DRAContext holds domain separation parameters for HKDF derivations.
+// Binds all derived keys to a specific asset and tenant.
+type DRAContext struct {
+	AssetID  string `json:"asset_id"`  // UUID — mixed into salt (per-installation entropy)
+	TenantID string `json:"tenant_id"` // UUID — mixed into info (per-tenant domain separation)
+}
+
 // DRAState holds the current Double Ratchet Algorithm state.
 type DRAState struct {
 	RootKey     string `json:"root_key"`      // base64url-encoded 32 bytes
@@ -28,6 +35,8 @@ type DRAState struct {
 	DHPublicKey string `json:"dh_public_key"` // our current public key (base64url)
 	DHPrivKey   string `json:"dh_priv_key"`   // our current private key (base64url)
 	PeerDHPub   string `json:"peer_dh_pub"`   // platform's current DH public key (base64url)
+	AssetID     string `json:"asset_id"`      // for domain separation
+	TenantID    string `json:"tenant_id"`     // for domain separation
 }
 
 // DRAInitResult contains the result of DRA initialization.
@@ -99,19 +108,19 @@ func FormatAsWazuhKey(tokenBytes []byte) string {
 // InitializeDRA creates the initial DRA state from a shared secret.
 // Must match TypeScript initializeDRA() exactly.
 //
-//	root_key_0  = HKDF(shared_secret, salt="aisac-mcp-root", info="aisac-mcp-root-init")
-//	chain_key_0 = HKDF(root_key_0,    salt="aisac-mcp-chain-salt", info="aisac-mcp-chain")
-//	mcp_token_0 = HKDF(chain_key_0,   salt="aisac-mcp-salt", info="aisac-mcp-token")
-func InitializeDRA(dhSharedSecret []byte) (*DRAInitResult, error) {
-	rootKey, err := hkdfDerive(dhSharedSecret, "aisac-mcp-root", "aisac-mcp-root-init", 32)
+//	root_key_0  = HKDF(shared_secret, salt="aisac-mcp-root:{asset_id}", info="aisac-mcp-root-init:{tenant_id}")
+//	chain_key_0 = HKDF(root_key_0,    salt="aisac-mcp-chain-salt:{asset_id}", info="aisac-mcp-chain:{tenant_id}")
+//	mcp_token_0 = HKDF(chain_key_0,   salt="aisac-mcp-salt:{asset_id}", info="aisac-mcp-token:{tenant_id}")
+func InitializeDRA(dhSharedSecret []byte, ctx DRAContext) (*DRAInitResult, error) {
+	rootKey, err := hkdfDerive(dhSharedSecret, "aisac-mcp-root:"+ctx.AssetID, "aisac-mcp-root-init:"+ctx.TenantID, 32)
 	if err != nil {
 		return nil, err
 	}
-	chainKey, err := hkdfDerive(rootKey, "aisac-mcp-chain-salt", "aisac-mcp-chain", 32)
+	chainKey, err := hkdfDerive(rootKey, "aisac-mcp-chain-salt:"+ctx.AssetID, "aisac-mcp-chain:"+ctx.TenantID, 32)
 	if err != nil {
 		return nil, err
 	}
-	tokenBytes, err := hkdfDerive(chainKey, "aisac-mcp-salt", "aisac-mcp-token", 32)
+	tokenBytes, err := hkdfDerive(chainKey, "aisac-mcp-salt:"+ctx.AssetID, "aisac-mcp-token:"+ctx.TenantID, 32)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +133,12 @@ func InitializeDRA(dhSharedSecret []byte) (*DRAInitResult, error) {
 
 // DeriveTokenFromChain derives the current MCP token from a chain key without advancing.
 // Must match TypeScript deriveTokenFromChain().
-func DeriveTokenFromChain(chainKeyB64 string) (string, error) {
+func DeriveTokenFromChain(chainKeyB64 string, ctx DRAContext) (string, error) {
 	chainKey, err := b64urlDecode(chainKeyB64)
 	if err != nil {
 		return "", fmt.Errorf("decode chain key: %w", err)
 	}
-	tokenBytes, err := hkdfDerive(chainKey, "aisac-mcp-salt", "aisac-mcp-token", 32)
+	tokenBytes, err := hkdfDerive(chainKey, "aisac-mcp-salt:"+ctx.AssetID, "aisac-mcp-token:"+ctx.TenantID, 32)
 	if err != nil {
 		return "", err
 	}
@@ -139,18 +148,18 @@ func DeriveTokenFromChain(chainKeyB64 string) (string, error) {
 // AdvanceChain advances the symmetric chain and returns the new token + chain key.
 // Must match TypeScript advanceChain().
 //
-//	token     = HKDF(chain_key, salt="aisac-mcp-salt", info="aisac-mcp-token")
-//	new_chain = HKDF(chain_key, salt="aisac-mcp-salt", info="aisac-mcp-advance")
-func AdvanceChain(chainKeyB64 string) (newChainKeyB64, mcpToken string, err error) {
+//	token     = HKDF(chain_key, salt="aisac-mcp-salt:{asset_id}", info="aisac-mcp-token:{tenant_id}")
+//	new_chain = HKDF(chain_key, salt="aisac-mcp-salt:{asset_id}", info="aisac-mcp-advance:{tenant_id}")
+func AdvanceChain(chainKeyB64 string, ctx DRAContext) (newChainKeyB64, mcpToken string, err error) {
 	chainKey, err := b64urlDecode(chainKeyB64)
 	if err != nil {
 		return "", "", fmt.Errorf("decode chain key: %w", err)
 	}
-	tokenBytes, err := hkdfDerive(chainKey, "aisac-mcp-salt", "aisac-mcp-token", 32)
+	tokenBytes, err := hkdfDerive(chainKey, "aisac-mcp-salt:"+ctx.AssetID, "aisac-mcp-token:"+ctx.TenantID, 32)
 	if err != nil {
 		return "", "", err
 	}
-	newChainKey, err := hkdfDerive(chainKey, "aisac-mcp-salt", "aisac-mcp-advance", 32)
+	newChainKey, err := hkdfDerive(chainKey, "aisac-mcp-salt:"+ctx.AssetID, "aisac-mcp-advance:"+ctx.TenantID, 32)
 	if err != nil {
 		return "", "", err
 	}
@@ -161,9 +170,9 @@ func AdvanceChain(chainKeyB64 string) (newChainKeyB64, mcpToken string, err erro
 // Must match TypeScript ratchetStep().
 //
 //	combined  = old_root || dh_shared_secret
-//	new_root  = HKDF(combined, salt="aisac-mcp-root", info="aisac-mcp-root-derive")
-//	new_chain = HKDF(new_root, salt="aisac-mcp-chain-salt", info="aisac-mcp-chain")
-func RatchetStep(rootKeyB64 string, dhSharedSecret []byte) (newRootKeyB64, newChainKeyB64 string, err error) {
+//	new_root  = HKDF(combined, salt="aisac-mcp-root:{asset_id}", info="aisac-mcp-root-derive:{tenant_id}")
+//	new_chain = HKDF(new_root, salt="aisac-mcp-chain-salt:{asset_id}", info="aisac-mcp-chain:{tenant_id}")
+func RatchetStep(rootKeyB64 string, dhSharedSecret []byte, ctx DRAContext) (newRootKeyB64, newChainKeyB64 string, err error) {
 	rootKey, err := b64urlDecode(rootKeyB64)
 	if err != nil {
 		return "", "", fmt.Errorf("decode root key: %w", err)
@@ -174,11 +183,11 @@ func RatchetStep(rootKeyB64 string, dhSharedSecret []byte) (newRootKeyB64, newCh
 	copy(combined, rootKey)
 	copy(combined[len(rootKey):], dhSharedSecret)
 
-	newRootKey, err := hkdfDerive(combined, "aisac-mcp-root", "aisac-mcp-root-derive", 32)
+	newRootKey, err := hkdfDerive(combined, "aisac-mcp-root:"+ctx.AssetID, "aisac-mcp-root-derive:"+ctx.TenantID, 32)
 	if err != nil {
 		return "", "", err
 	}
-	newChainKey, err := hkdfDerive(newRootKey, "aisac-mcp-chain-salt", "aisac-mcp-chain", 32)
+	newChainKey, err := hkdfDerive(newRootKey, "aisac-mcp-chain-salt:"+ctx.AssetID, "aisac-mcp-chain:"+ctx.TenantID, 32)
 	if err != nil {
 		return "", "", err
 	}

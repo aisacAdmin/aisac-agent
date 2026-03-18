@@ -51,6 +51,16 @@ export interface DRAInitResult {
   mcpToken: string;  // wazuh_<base64url> format
 }
 
+/**
+ * Domain separation context for HKDF derivations.
+ * Binds all derived keys to a specific asset and tenant,
+ * preventing cross-tenant or cross-asset key reuse.
+ */
+export interface DRAContext {
+  assetId: string;   // UUID — mixed into salt (per-installation entropy)
+  tenantId: string;  // UUID — mixed into info (per-tenant domain separation)
+}
+
 // ============================================================================
 // Base64 Encoding/Decoding Utilities
 // ============================================================================
@@ -335,14 +345,14 @@ export function formatAsWazuhKey(tokenBytes: Uint8Array): string {
 /**
  * Initialize DRA state from X25519 shared secret (during registration).
  *
- * root_key_0  = HKDF(shared_secret, salt="aisac-mcp-root", info="aisac-mcp-root-init")
- * chain_key_0 = HKDF(root_key_0,    salt="aisac-mcp-chain-salt", info="aisac-mcp-chain")
- * mcp_token_0 = HKDF(chain_key_0,   salt="aisac-mcp-salt", info="aisac-mcp-token")
+ * root_key_0  = HKDF(shared_secret, salt="aisac-mcp-root:{asset_id}", info="aisac-mcp-root-init:{tenant_id}")
+ * chain_key_0 = HKDF(root_key_0,    salt="aisac-mcp-chain-salt:{asset_id}", info="aisac-mcp-chain:{tenant_id}")
+ * mcp_token_0 = HKDF(chain_key_0,   salt="aisac-mcp-salt:{asset_id}", info="aisac-mcp-token:{tenant_id}")
  */
-export async function initializeDRA(dhSharedSecret: Uint8Array): Promise<DRAInitResult> {
-  const rootKey = await hkdfDerive(dhSharedSecret, 'aisac-mcp-root', 'aisac-mcp-root-init', 32);
-  const chainKey = await hkdfDerive(rootKey, 'aisac-mcp-chain-salt', 'aisac-mcp-chain', 32);
-  const tokenBytes = await hkdfDerive(chainKey, 'aisac-mcp-salt', 'aisac-mcp-token', 32);
+export async function initializeDRA(dhSharedSecret: Uint8Array, ctx: DRAContext): Promise<DRAInitResult> {
+  const rootKey = await hkdfDerive(dhSharedSecret, `aisac-mcp-root:${ctx.assetId}`, `aisac-mcp-root-init:${ctx.tenantId}`, 32);
+  const chainKey = await hkdfDerive(rootKey, `aisac-mcp-chain-salt:${ctx.assetId}`, `aisac-mcp-chain:${ctx.tenantId}`, 32);
+  const tokenBytes = await hkdfDerive(chainKey, `aisac-mcp-salt:${ctx.assetId}`, `aisac-mcp-token:${ctx.tenantId}`, 32);
 
   return {
     rootKey: bytesToB64(rootKey),
@@ -355,9 +365,9 @@ export async function initializeDRA(dhSharedSecret: Uint8Array): Promise<DRAInit
  * Derive current MCP token from chain key (without advancing the chain).
  * Used by mcp-token edge function to get the current valid token.
  */
-export async function deriveTokenFromChain(chainKeyB64: string): Promise<string> {
+export async function deriveTokenFromChain(chainKeyB64: string, ctx: DRAContext): Promise<string> {
   const chainKey = b64ToBytes(chainKeyB64);
-  const tokenBytes = await hkdfDerive(chainKey, 'aisac-mcp-salt', 'aisac-mcp-token', 32);
+  const tokenBytes = await hkdfDerive(chainKey, `aisac-mcp-salt:${ctx.assetId}`, `aisac-mcp-token:${ctx.tenantId}`, 32);
   return formatAsWazuhKey(tokenBytes);
 }
 
@@ -365,14 +375,14 @@ export async function deriveTokenFromChain(chainKeyB64: string): Promise<string>
  * Advance the symmetric chain (24h rotation via cronjob).
  * Produces the new token AND advances the chain key (one-way = forward secrecy).
  *
- * token     = HKDF(chain_key, salt="aisac-mcp-salt", info="aisac-mcp-token")
- * new_chain = HKDF(chain_key, salt="aisac-mcp-salt", info="aisac-mcp-advance")
+ * token     = HKDF(chain_key, salt="aisac-mcp-salt:{asset_id}", info="aisac-mcp-token:{tenant_id}")
+ * new_chain = HKDF(chain_key, salt="aisac-mcp-salt:{asset_id}", info="aisac-mcp-advance:{tenant_id}")
  */
-export async function advanceChain(chainKeyB64: string): Promise<ChainAdvanceResult> {
+export async function advanceChain(chainKeyB64: string, ctx: DRAContext): Promise<ChainAdvanceResult> {
   const chainKey = b64ToBytes(chainKeyB64);
 
-  const tokenBytes = await hkdfDerive(chainKey, 'aisac-mcp-salt', 'aisac-mcp-token', 32);
-  const newChainKey = await hkdfDerive(chainKey, 'aisac-mcp-salt', 'aisac-mcp-advance', 32);
+  const tokenBytes = await hkdfDerive(chainKey, `aisac-mcp-salt:${ctx.assetId}`, `aisac-mcp-token:${ctx.tenantId}`, 32);
+  const newChainKey = await hkdfDerive(chainKey, `aisac-mcp-salt:${ctx.assetId}`, `aisac-mcp-advance:${ctx.tenantId}`, 32);
 
   return {
     newChainKey: bytesToB64(newChainKey),
@@ -385,12 +395,13 @@ export async function advanceChain(chainKeyB64: string): Promise<ChainAdvanceRes
  * to derive new root key and chain key (break-in recovery).
  *
  * combined  = old_root || dh_shared_secret
- * new_root  = HKDF(combined, salt="aisac-mcp-root", info="aisac-mcp-root-derive")
- * new_chain = HKDF(new_root, salt="aisac-mcp-chain-salt", info="aisac-mcp-chain")
+ * new_root  = HKDF(combined, salt="aisac-mcp-root:{asset_id}", info="aisac-mcp-root-derive:{tenant_id}")
+ * new_chain = HKDF(new_root, salt="aisac-mcp-chain-salt:{asset_id}", info="aisac-mcp-chain:{tenant_id}")
  */
 export async function ratchetStep(
   rootKeyB64: string,
-  dhSharedSecret: Uint8Array
+  dhSharedSecret: Uint8Array,
+  ctx: DRAContext
 ): Promise<RatchetStepResult> {
   const rootKey = b64ToBytes(rootKeyB64);
 
@@ -399,8 +410,8 @@ export async function ratchetStep(
   combined.set(rootKey, 0);
   combined.set(dhSharedSecret, rootKey.length);
 
-  const newRootKey = await hkdfDerive(combined, 'aisac-mcp-root', 'aisac-mcp-root-derive', 32);
-  const newChainKey = await hkdfDerive(newRootKey, 'aisac-mcp-chain-salt', 'aisac-mcp-chain', 32);
+  const newRootKey = await hkdfDerive(combined, `aisac-mcp-root:${ctx.assetId}`, `aisac-mcp-root-derive:${ctx.tenantId}`, 32);
+  const newChainKey = await hkdfDerive(newRootKey, `aisac-mcp-chain-salt:${ctx.assetId}`, `aisac-mcp-chain:${ctx.tenantId}`, 32);
 
   return {
     newRootKey: bytesToB64(newRootKey),

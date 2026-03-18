@@ -532,7 +532,10 @@ serve(async req => {
           );
 
           // Initialize DRA: derive root_key, chain_key, initial mcp_token
-          const dra = await initializeDRA(sharedSecret);
+          const dra = await initializeDRA(sharedSecret, {
+            assetId: assetValidation.asset_id,
+            tenantId: assetValidation.tenant_id,
+          });
 
           // Store platform's DH keys (private encrypted, public plaintext)
           updateData.mcp_dh_public_key = platformKeypair.publicKey;

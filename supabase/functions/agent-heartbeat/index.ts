@@ -287,14 +287,15 @@ serve(async (req: Request) => {
             const dhSharedSecret = computeSharedSecret(currentDhPrivKey, payload.dh_public_key);
 
             // Ratchet step: new root key + chain key from old root + new DH shared
-            const ratcheted = await ratchetStep(currentRootKey, dhSharedSecret);
+            const draCtx = { assetId: asset.id, tenantId: asset.tenant_id };
+            const ratcheted = await ratchetStep(currentRootKey, dhSharedSecret, draCtx);
 
             // Generate new platform ephemeral keypair
             const newPlatformKeypair = generateX25519Keypair();
             responseDhPublicKey = newPlatformKeypair.publicKey;
 
             // Derive new MCP token from the new chain key
-            const newMcpToken = await deriveTokenFromChain(ratcheted.newChainKey);
+            const newMcpToken = await deriveTokenFromChain(ratcheted.newChainKey, draCtx);
 
             // Store updated DRA state (encrypted)
             const draUpdate: Record<string, unknown> = {

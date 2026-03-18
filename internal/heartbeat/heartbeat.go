@@ -396,8 +396,9 @@ func (c *Client) processRatchetResponse(platformPubB64, ourPrivB64 string) error
 		return fmt.Errorf("compute shared secret: %w", err)
 	}
 
-	// Ratchet step: derive new root key + chain key
-	newRootKey, newChainKey, err := RatchetStep(c.draState.RootKey, sharedSecret)
+	// Ratchet step: derive new root key + chain key (with domain separation)
+	ctx := DRAContext{AssetID: c.draState.AssetID, TenantID: c.draState.TenantID}
+	newRootKey, newChainKey, err := RatchetStep(c.draState.RootKey, sharedSecret, ctx)
 	if err != nil {
 		return fmt.Errorf("ratchet step: %w", err)
 	}
